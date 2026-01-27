@@ -1,0 +1,954 @@
+const axios = require('axios');
+const { db, log } = require('../database');
+
+const PLEX_CLIENT_ID = 'flexerr-media-manager';
+const PLEX_PRODUCT = 'Flexerr';
+const PLEX_DEVICE = 'Web';
+
+class PlexService {
+  // OAuth: Create a PIN for authentication
+  static async createAuthPin() {
+    const response = await axios.post('https://plex.tv/api/v2/pins', null, {
+      params: { strong: true },
+      headers: {
+        'Accept': 'application/json',
+        'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+        'X-Plex-Product': PLEX_PRODUCT,
+        'X-Plex-Device': PLEX_DEVICE,
+        'X-Plex-Version': '1.0.0'
+      }
+    });
+
+    return {
+      id: response.data.id,
+      code: response.data.code,
+      authUrl: `https://app.plex.tv/auth#?clientID=${PLEX_CLIENT_ID}&code=${response.data.code}&context%5Bdevice%5D%5Bproduct%5D=${PLEX_PRODUCT}`
+    };
+  }
+
+  // OAuth: Check if PIN has been claimed and get token
+  static async checkAuthPin(pinId) {
+    const response = await axios.get(`https://plex.tv/api/v2/pins/${pinId}`, {
+      headers: {
+        'Accept': 'application/json',
+        'X-Plex-Client-Identifier': PLEX_CLIENT_ID
+      }
+    });
+
+    if (response.data.authToken) {
+      return {
+        success: true,
+        token: response.data.authToken
+      };
+    }
+
+    return { success: false };
+  }
+
+  // OAuth: Get user's servers after authentication
+  static async getServers(token) {
+    const response = await axios.get('https://plex.tv/api/v2/resources', {
+      params: { includeHttps: 1, includeRelay: 0 },
+      headers: {
+        'Accept': 'application/json',
+        'X-Plex-Token': token,
+        'X-Plex-Client-Identifier': PLEX_CLIENT_ID
+      }
+    });
+
+    // Filter to only Plex Media Servers
+    const servers = response.data.filter(r => r.provides === 'server');
+
+    return servers.map(server => ({
+      name: server.name,
+      clientId: server.clientIdentifier,
+      owned: server.owned,
+      connections: server.connections.map(c => ({
+        uri: c.uri,
+        local: c.local,
+        relay: c.relay
+      }))
+    }));
+  }
+
+
+  constructor(url, token) {
+    this.url = url?.replace(/\/$/, '');
+    this.token = token;
+    this.client = null;
+    if (this.url && this.token) {
+      this.initClient();
+    }
+  }
+
+  initClient() {
+    this.client = axios.create({
+      baseURL: this.url,
+      headers: {
+        'X-Plex-Token': this.token,
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+  }
+
+  static fromDb() {
+    const service = db.prepare("SELECT * FROM services WHERE type = 'plex' AND is_active = 1").get();
+    if (!service) return null;
+    return new PlexService(service.url, service.api_key);
+  }
+
+  async testConnection() {
+    try {
+      const response = await this.client.get('/');
+      const data = response.data;
+      return {
+        success: true,
+        version: data.MediaContainer?.version,
+        name: data.MediaContainer?.friendlyName,
+        platform: data.MediaContainer?.platform
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async getLibraries() {
+    const response = await this.client.get('/library/sections');
+    return response.data.MediaContainer.Directory.map(lib => ({
+      id: lib.key,
+      title: lib.title,
+      type: lib.type,
+      agent: lib.agent,
+      scanner: lib.scanner,
+      location: lib.Location?.[0]?.path
+    }));
+  }
+
+  async getLibraryContents(libraryId, type = null) {
+    const response = await this.client.get(`/library/sections/${libraryId}/all`);
+    return response.data.MediaContainer.Metadata || [];
+  }
+
+  async getItem(ratingKey) {
+    const response = await this.client.get(`/library/metadata/${ratingKey}`);
+    return response.data.MediaContainer.Metadata?.[0];
+  }
+
+  async getItemChildren(ratingKey) {
+    const response = await this.client.get(`/library/metadata/${ratingKey}/children`);
+    return response.data.MediaContainer.Metadata || [];
+  }
+
+  async getWatchHistory(ratingKey = null) {
+    let url = '/status/sessions/history/all';
+    if (ratingKey) {
+      url += `?metadataItemID=${ratingKey}`;
+    }
+    const response = await this.client.get(url);
+    return response.data.MediaContainer.Metadata || [];
+  }
+
+  async getUsers() {
+    // Note: This requires Plex Pass and admin access
+    try {
+      const response = await axios.get('https://plex.tv/api/users', {
+        headers: {
+          'X-Plex-Token': this.token,
+          'Accept': 'application/json'
+        }
+      });
+      return response.data.MediaContainer?.User || [];
+    } catch (error) {
+      // Fall back to local users
+      const response = await this.client.get('/accounts');
+      return response.data.MediaContainer?.Account || [];
+    }
+  }
+
+  async getWatchlist(userId = null) {
+    // Plex watchlist - discover.provider.plex.tv (no params - causes 400)
+    try {
+      console.log('[Plex] Fetching watchlist...');
+      const response = await axios.get('https://discover.provider.plex.tv/library/sections/watchlist/all', {
+        headers: {
+          'X-Plex-Token': this.token,
+          'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+          'Accept': 'application/json'
+        }
+      });
+      const items = response.data.MediaContainer?.Metadata || [];
+      console.log(`[Plex] Got ${items.length} watchlist items`);
+      return items;
+    } catch (error) {
+      console.error('[Plex] Watchlist fetch failed:', error.response?.status, error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  async isOnWatchlist(ratingKey, itemMetadata = null) {
+    const watchlist = await this.getWatchlist();
+
+    // Direct ratingKey match (rare - only works if item was added from same server)
+    const directMatch = watchlist.some(item =>
+      item.ratingKey === ratingKey ||
+      item.ratingKey === String(ratingKey) ||
+      item.guid === ratingKey ||
+      item.Guid?.some(g => g.id === ratingKey)
+    );
+
+    if (directMatch) return true;
+
+    // If we have item metadata, try matching by title+year (more reliable)
+    if (itemMetadata) {
+      const titleYear = `${itemMetadata.title?.toLowerCase()}|${itemMetadata.year}`;
+      return watchlist.some(w => `${w.title?.toLowerCase()}|${w.year}` === titleYear);
+    }
+
+    // Fetch item metadata to get title+year for matching
+    try {
+      const item = await this.getItemMetadata(ratingKey);
+      if (item) {
+        const titleYear = `${item.title?.toLowerCase()}|${item.year}`;
+        return watchlist.some(w => `${w.title?.toLowerCase()}|${w.year}` === titleYear);
+      }
+    } catch (e) {
+      // Item might not exist anymore
+    }
+
+    return false;
+  }
+
+  async getCollections(libraryId) {
+    const response = await this.client.get(`/library/sections/${libraryId}/collections`);
+    return response.data.MediaContainer.Metadata || [];
+  }
+
+  async createCollection(libraryId, title, description = '') {
+    const response = await this.client.post(`/library/collections`, null, {
+      params: {
+        type: 1, // 1 = movie, 2 = show
+        title: title,
+        smart: 0,
+        sectionId: libraryId,
+        summary: description
+      }
+    });
+    return response.data;
+  }
+
+  async addToCollection(collectionRatingKey, itemRatingKey) {
+    await this.client.put(`/library/collections/${collectionRatingKey}/items`, null, {
+      params: {
+        uri: `server://${await this.getMachineId()}/com.plexapp.plugins.library/library/metadata/${itemRatingKey}`
+      }
+    });
+  }
+
+  async removeFromCollection(collectionRatingKey, itemRatingKey) {
+    await this.client.delete(`/library/collections/${collectionRatingKey}/items/${itemRatingKey}`);
+  }
+
+  async getOrCreateCollection(libraryId, title, description = '', itemType = null) {
+    const collections = await this.getCollections(libraryId);
+    let collection = collections.find(c => c.title === title);
+
+    // Check if existing collection matches the item type (for TV libraries)
+    // Collections have subtypes: 'show' for shows, 'episode' for episodes
+    if (collection && itemType === 'episode' && collection.subtype === 'show') {
+      // Need episode collection, but found show collection - look for episode version
+      const episodeTitle = title + ' (Episodes)';
+      collection = collections.find(c => c.title === episodeTitle);
+      if (!collection) {
+        // Create episode-specific collection
+        const response = await this.client.post(`/library/collections`, null, {
+          params: {
+            type: 4, // 4 = episode
+            title: episodeTitle,
+            smart: 0,
+            sectionId: libraryId,
+            summary: description || 'Episodes scheduled for removal'
+          }
+        });
+
+        const newCollections = await this.getCollections(libraryId);
+        collection = newCollections.find(c => c.title === episodeTitle);
+      }
+      return collection;
+    }
+
+    if (!collection) {
+      // Create the collection
+      const libs = await this.getLibraries();
+      const lib = libs.find(l => l.id === libraryId.toString());
+
+      // Determine collection type: 1=movie, 2=show, 4=episode
+      let type;
+      if (lib?.type === 'movie') {
+        type = 1;
+      } else if (itemType === 'episode') {
+        type = 4;
+      } else {
+        type = 2; // show
+      }
+
+      const response = await this.client.post(`/library/collections`, null, {
+        params: {
+          type: type,
+          title: title,
+          smart: 0,
+          sectionId: libraryId,
+          summary: description
+        }
+      });
+
+      // Fetch the created collection
+      const newCollections = await this.getCollections(libraryId);
+      collection = newCollections.find(c => c.title === title);
+    }
+
+    return collection;
+  }
+
+  async getMachineId() {
+    const response = await this.client.get('/');
+    return response.data.MediaContainer.machineIdentifier;
+  }
+
+  async deleteItem(ratingKey) {
+    await this.client.delete(`/library/metadata/${ratingKey}`);
+    log('info', 'deletion', 'Deleted item from Plex', { media_id: ratingKey });
+  }
+
+  async getItemWatchStatus(ratingKey) {
+    const item = await this.getItem(ratingKey);
+    if (!item) {
+      return {
+        viewCount: 0,
+        lastViewedAt: null,
+        viewOffset: 0,
+        duration: 0
+      };
+    }
+    return {
+      viewCount: item.viewCount || 0,
+      lastViewedAt: item.lastViewedAt ? new Date(item.lastViewedAt * 1000) : null,
+      viewOffset: item.viewOffset || 0,
+      duration: item.duration || 0
+    };
+  }
+
+  async getShowActivity(showRatingKey) {
+    // Get all episodes and find most recent activity
+    const seasons = await this.getItemChildren(showRatingKey);
+    let lastActivity = null;
+    let totalWatched = 0;
+    let totalEpisodes = 0;
+
+    for (const season of seasons) {
+      const episodes = await this.getItemChildren(season.ratingKey);
+      for (const episode of episodes) {
+        totalEpisodes++;
+        if (episode.viewCount > 0) {
+          totalWatched++;
+          if (episode.lastViewedAt) {
+            const viewDate = new Date(episode.lastViewedAt * 1000);
+            if (!lastActivity || viewDate > lastActivity) {
+              lastActivity = viewDate;
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      lastActivity,
+      totalWatched,
+      totalEpisodes,
+      watchedPercentage: totalEpisodes > 0 ? (totalWatched / totalEpisodes) * 100 : 0
+    };
+  }
+
+  async getItemMetadata(ratingKey) {
+    const item = await this.getItem(ratingKey);
+    if (!item) {
+      return null;
+    }
+    return {
+      ratingKey: item.ratingKey,
+      title: item.title,
+      year: item.year,
+      type: item.type,
+      thumb: item.thumb ? `${this.url}${item.thumb}?X-Plex-Token=${this.token}` : null,
+      rating: item.rating,
+      audienceRating: item.audienceRating,
+      contentRating: item.contentRating,
+      genres: item.Genre?.map(g => g.tag) || [],
+      addedAt: item.addedAt ? new Date(item.addedAt * 1000) : null,
+      originallyAvailableAt: item.originallyAvailableAt,
+      duration: item.duration,
+      viewCount: item.viewCount || 0,
+      lastViewedAt: item.lastViewedAt ? new Date(item.lastViewedAt * 1000) : null,
+      guid: item.guid,
+      guids: item.Guid?.map(g => g.id) || [],
+      // Episode/Season specific fields
+      grandparentRatingKey: item.grandparentRatingKey,
+      grandparentTitle: item.grandparentTitle,
+      parentRatingKey: item.parentRatingKey,
+      parentTitle: item.parentTitle,
+      parentIndex: item.parentIndex,
+      index: item.index,
+      // Media/file info for path-based matching
+      Media: item.Media
+    };
+  }
+
+  // =====================================================
+  // MULTI-USER WATCH TRACKING
+  // =====================================================
+
+  /**
+   * Get all users with access to this server (home users + friends)
+   */
+  async getAllSharedUsers() {
+    const users = [];
+
+    try {
+      // Get home/managed users
+      const homeRes = await axios.get('https://plex.tv/api/v2/home/users', {
+        headers: {
+          'X-Plex-Token': this.token,
+          'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+          'Accept': 'application/json'
+        }
+      });
+
+      for (const user of homeRes.data || []) {
+        users.push({
+          id: user.id,
+          uuid: user.uuid,
+          username: user.title || user.username,
+          thumb: user.thumb,
+          isAdmin: user.admin === true,
+          isManaged: user.restricted === true,
+          token: null // Will need to switch user context to get token
+        });
+      }
+    } catch (err) {
+      console.log('[Plex] Could not fetch home users:', err.message);
+    }
+
+    try {
+      // Get friends/shared users via older API
+      const friendsRes = await axios.get('https://plex.tv/api/users', {
+        headers: {
+          'X-Plex-Token': this.token,
+          'Accept': 'application/json'
+        }
+      });
+
+      const friendUsers = friendsRes.data?.MediaContainer?.User || [];
+      for (const user of friendUsers) {
+        if (!users.find(u => u.id === user.id)) {
+          users.push({
+            id: user.id,
+            username: user.title || user.username,
+            email: user.email,
+            thumb: user.thumb,
+            isAdmin: false,
+            isManaged: false
+          });
+        }
+      }
+    } catch (err) {
+      console.log('[Plex] Could not fetch friends:', err.message);
+    }
+
+    return users;
+  }
+
+  /**
+   * Get detailed watch history with per-user breakdown
+   * Uses the watch history endpoint which includes accountID
+   */
+  async getDetailedWatchHistory(libraryId = null, days = 90) {
+    try {
+      const params = new URLSearchParams();
+      if (libraryId) params.append('librarySectionID', libraryId);
+
+      const response = await this.client.get(`/status/sessions/history/all?${params}`);
+      const history = response.data.MediaContainer?.Metadata || [];
+
+      // Group by accountID and item
+      const userHistory = {};
+      const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
+
+      for (const entry of history) {
+        const viewedAt = entry.viewedAt * 1000;
+        if (viewedAt < cutoff) continue;
+
+        const accountId = entry.accountID;
+        const ratingKey = entry.ratingKey;
+
+        if (!userHistory[accountId]) {
+          userHistory[accountId] = {};
+        }
+
+        if (!userHistory[accountId][ratingKey]) {
+          userHistory[accountId][ratingKey] = {
+            ratingKey,
+            title: entry.title,
+            grandparentTitle: entry.grandparentTitle, // Show name
+            parentTitle: entry.parentTitle, // Season name
+            type: entry.type,
+            viewCount: 0,
+            views: []
+          };
+        }
+
+        userHistory[accountId][ratingKey].viewCount++;
+        userHistory[accountId][ratingKey].views.push({
+          viewedAt: new Date(viewedAt),
+          duration: entry.duration,
+          viewOffset: entry.viewOffset
+        });
+      }
+
+      return userHistory;
+    } catch (err) {
+      console.error('[Plex] Error getting detailed watch history:', err.message);
+      return {};
+    }
+  }
+
+  /**
+   * Get all episodes of a show with per-user watch status
+   */
+  async getShowEpisodesWithUserStatus(showRatingKey) {
+    const episodes = [];
+    const seasons = await this.getItemChildren(showRatingKey);
+
+    for (const season of seasons) {
+      if (season.title === 'Specials') continue; // Skip specials by default
+
+      const seasonEpisodes = await this.getItemChildren(season.ratingKey);
+      for (const ep of seasonEpisodes) {
+        episodes.push({
+          ratingKey: ep.ratingKey,
+          title: ep.title,
+          seasonNumber: ep.parentIndex || season.index,
+          episodeNumber: ep.index,
+          absoluteIndex: episodes.length + 1,
+          duration: ep.duration,
+          addedAt: ep.addedAt ? new Date(ep.addedAt * 1000) : null,
+          viewCount: ep.viewCount || 0,
+          lastViewedAt: ep.lastViewedAt ? new Date(ep.lastViewedAt * 1000) : null,
+          grandparentRatingKey: showRatingKey
+        });
+      }
+    }
+
+    // Sort by season and episode number
+    episodes.sort((a, b) => {
+      if (a.seasonNumber !== b.seasonNumber) return a.seasonNumber - b.seasonNumber;
+      return a.episodeNumber - b.episodeNumber;
+    });
+
+    // Re-assign absolute index after sorting
+    episodes.forEach((ep, i) => ep.absoluteIndex = i + 1);
+
+    return episodes;
+  }
+
+  /**
+   * Analyze multi-user watch progress for a show
+   * Returns per-user progress, velocity, and projected timelines
+   */
+  async analyzeShowWatchProgress(showRatingKey, watchHistoryDays = 90) {
+    const show = await this.getItem(showRatingKey);
+    const episodes = await this.getShowEpisodesWithUserStatus(showRatingKey);
+    const history = await this.getDetailedWatchHistory(null, watchHistoryDays);
+
+    // Build episode lookup
+    const episodeMap = new Map(episodes.map(ep => [ep.ratingKey, ep]));
+
+    // Analyze each user's progress
+    const userProgress = {};
+
+    for (const [accountId, userItems] of Object.entries(history)) {
+      // Filter to episodes from this show
+      const showEpisodes = Object.values(userItems).filter(item => {
+        const ep = episodeMap.get(item.ratingKey);
+        return ep !== undefined;
+      });
+
+      if (showEpisodes.length === 0) continue;
+
+      // Find last watched episode (by absolute index)
+      let lastWatchedIndex = 0;
+      let lastWatchedDate = null;
+      let firstWatchedDate = null;
+      const watchedEpisodes = new Set();
+      const watchDates = [];
+
+      for (const item of showEpisodes) {
+        const ep = episodeMap.get(item.ratingKey);
+        if (!ep) continue;
+
+        watchedEpisodes.add(ep.ratingKey);
+
+        for (const view of item.views) {
+          watchDates.push(view.viewedAt);
+          if (!firstWatchedDate || view.viewedAt < firstWatchedDate) {
+            firstWatchedDate = view.viewedAt;
+          }
+          if (!lastWatchedDate || view.viewedAt > lastWatchedDate) {
+            lastWatchedDate = view.viewedAt;
+            lastWatchedIndex = ep.absoluteIndex;
+          }
+        }
+      }
+
+      // Calculate watch velocity (episodes per day)
+      let velocity = 0;
+      if (watchDates.length > 1 && firstWatchedDate && lastWatchedDate) {
+        const daysDiff = (lastWatchedDate - firstWatchedDate) / (1000 * 60 * 60 * 24);
+        if (daysDiff > 0) {
+          velocity = watchedEpisodes.size / daysDiff;
+        }
+      } else if (watchedEpisodes.size > 0) {
+        // Single viewing session, assume 1 episode per day as baseline
+        velocity = 1;
+      }
+
+      // Find current position (highest consecutive watched episode)
+      let currentPosition = 0;
+      for (const ep of episodes) {
+        if (watchedEpisodes.has(ep.ratingKey)) {
+          currentPosition = ep.absoluteIndex;
+        } else {
+          break; // Stop at first unwatched
+        }
+      }
+
+      // If they've skipped around, use last watched instead
+      if (lastWatchedIndex > currentPosition) {
+        currentPosition = lastWatchedIndex;
+      }
+
+      userProgress[accountId] = {
+        accountId,
+        watchedCount: watchedEpisodes.size,
+        totalEpisodes: episodes.length,
+        currentPosition,
+        lastWatchedIndex,
+        lastWatchedDate,
+        firstWatchedDate,
+        velocity, // episodes per day
+        isActive: lastWatchedDate && (Date.now() - lastWatchedDate.getTime()) < (30 * 24 * 60 * 60 * 1000), // Active if watched in last 30 days
+        daysSinceLastWatch: lastWatchedDate ? Math.floor((Date.now() - lastWatchedDate.getTime()) / (1000 * 60 * 60 * 24)) : null
+      };
+    }
+
+    return {
+      show: {
+        ratingKey: showRatingKey,
+        title: show.title,
+        totalEpisodes: episodes.length
+      },
+      episodes,
+      userProgress,
+      activeViewers: Object.values(userProgress).filter(u => u.isActive).length
+    };
+  }
+
+  /**
+   * Get recently watched episode info per user for a show
+   * Returns the most recently watched episode for each user who has watched the show
+   */
+  async getRecentlyWatchedByUsers(showRatingKey) {
+    const analysis = await this.analyzeShowWatchProgress(showRatingKey);
+    const { episodes, userProgress } = analysis;
+    
+    // Build episode lookup by absoluteIndex
+    const episodeByIndex = {};
+    for (const ep of episodes) {
+      episodeByIndex[ep.absoluteIndex] = ep;
+    }
+    
+    // Get user details from database
+    const { db } = require('../database');
+    
+    const recentlyWatched = [];
+    
+    for (const [accountId, progress] of Object.entries(userProgress)) {
+      const lastEp = episodeByIndex[progress.lastWatchedIndex];
+      if (!lastEp) continue;
+      
+      // Try to get username from database
+      let username = accountId;
+      try {
+        const user = db.prepare('SELECT username FROM users WHERE plex_id = ?').get(accountId);
+        if (user) username = user.username;
+      } catch (e) {
+        // Use accountId as fallback
+      }
+      
+      recentlyWatched.push({
+        username,
+        accountId,
+        episodeTitle: lastEp.title,
+        seasonNumber: lastEp.seasonNumber,
+        episodeNumber: lastEp.episodeNumber,
+        watchedAt: progress.lastWatchedDate,
+        currentPosition: progress.currentPosition,
+        totalWatched: progress.watchedCount,
+        totalEpisodes: progress.totalEpisodes,
+        velocity: progress.velocity,
+        isActive: progress.isActive,
+        daysSinceLastWatch: progress.daysSinceLastWatch
+      });
+    }
+    
+    // Sort by most recent watch first
+    recentlyWatched.sort((a, b) => {
+      if (!a.watchedAt) return 1;
+      if (!b.watchedAt) return -1;
+      return b.watchedAt - a.watchedAt;
+    });
+    
+    return recentlyWatched;
+  }
+
+  /**
+   * Determine which episodes are safe to delete based on multi-user analysis
+   *
+   * An episode is safe to delete if:
+   * 1. All active viewers have watched past it
+   * 2. No viewer will need it within the buffer period (based on velocity)
+   * 3. It hasn't been watched by anyone in minDaysSinceWatch days
+   */
+  async getSmartEpisodeDeletionCandidates(showRatingKey, options = {}) {
+    const {
+      minDaysSinceWatch = 15,      // Minimum days since last watch
+      velocityBufferDays = 7,      // Extra days buffer for velocity projection
+      protectAhead = 3,            // Always protect X episodes ahead of slowest viewer
+    } = options;
+
+    const analysis = await this.analyzeShowWatchProgress(showRatingKey);
+    const { episodes, userProgress } = analysis;
+
+    const activeUsers = Object.values(userProgress).filter(u => u.isActive);
+    const deletionCandidates = [];
+
+    // If no active users, all watched episodes older than minDaysSinceWatch are candidates
+    if (activeUsers.length === 0) {
+      for (const ep of episodes) {
+        if (ep.viewCount > 0 && ep.lastViewedAt) {
+          const daysSinceWatch = (Date.now() - ep.lastViewedAt.getTime()) / (1000 * 60 * 60 * 24);
+          if (daysSinceWatch >= minDaysSinceWatch) {
+            deletionCandidates.push({
+              ...ep,
+              reason: 'No active viewers, unwatched for ' + Math.floor(daysSinceWatch) + ' days',
+              safeToDelete: true
+            });
+          }
+        }
+      }
+      return { analysis, deletionCandidates, protectedEpisodes: [] };
+    }
+
+    // Find the "slowest" viewer (lowest current position among active users)
+    const slowestViewer = activeUsers.reduce((min, u) =>
+      u.currentPosition < min.currentPosition ? u : min
+    , activeUsers[0]);
+
+    // Calculate how far ahead we need to protect based on velocity
+    let protectionBuffer = protectAhead;
+    for (const user of activeUsers) {
+      if (user.velocity > 0) {
+        // Protect enough episodes for velocityBufferDays of watching
+        const velocityProtection = Math.ceil(user.velocity * velocityBufferDays);
+        protectionBuffer = Math.max(protectionBuffer, velocityProtection);
+      }
+    }
+
+    // The "safe deletion threshold" is the slowest viewer's position minus the buffer
+    // We also check that ALL active viewers are past the episode
+    const minActivePosition = Math.min(...activeUsers.map(u => u.currentPosition));
+    const safeThreshold = minActivePosition - 1; // Episodes before the earliest active viewer
+
+    const protectedEpisodes = [];
+
+    for (const ep of episodes) {
+      const daysSinceWatch = ep.lastViewedAt
+        ? (Date.now() - ep.lastViewedAt.getTime()) / (1000 * 60 * 60 * 24)
+        : null;
+
+      // Check if episode is behind ALL active viewers
+      const behindAllViewers = activeUsers.every(u => ep.absoluteIndex < u.currentPosition);
+
+      // Check if any viewer might need this episode soon (velocity projection)
+      let neededSoon = false;
+      for (const user of activeUsers) {
+        if (user.velocity > 0 && ep.absoluteIndex >= user.currentPosition) {
+          const episodesToReach = ep.absoluteIndex - user.currentPosition;
+          const daysToReach = episodesToReach / user.velocity;
+          if (daysToReach <= velocityBufferDays) {
+            neededSoon = true;
+            break;
+          }
+        }
+      }
+
+      // Check minimum days since watch
+      const oldEnough = daysSinceWatch !== null && daysSinceWatch >= minDaysSinceWatch;
+
+      if (behindAllViewers && oldEnough && !neededSoon && ep.viewCount > 0) {
+        deletionCandidates.push({
+          ...ep,
+          daysSinceWatch: Math.floor(daysSinceWatch),
+          reason: `Behind all ${activeUsers.length} active viewers, unwatched for ${Math.floor(daysSinceWatch)} days`,
+          safeToDelete: true
+        });
+      } else {
+        let protectionReason = [];
+        if (!behindAllViewers) protectionReason.push('ahead of active viewer');
+        if (neededSoon) protectionReason.push('viewer approaching based on velocity');
+        if (!oldEnough && ep.viewCount > 0) protectionReason.push(`only ${Math.floor(daysSinceWatch || 0)} days since watch`);
+        if (ep.viewCount === 0) protectionReason.push('never watched');
+
+        protectedEpisodes.push({
+          ...ep,
+          protectionReason: protectionReason.join(', '),
+          safeToDelete: false
+        });
+      }
+    }
+
+    return {
+      analysis,
+      deletionCandidates,
+      protectedEpisodes,
+      summary: {
+        totalEpisodes: episodes.length,
+        activeViewers: activeUsers.length,
+        slowestViewerPosition: slowestViewer.currentPosition,
+        candidatesForDeletion: deletionCandidates.length,
+        protectedCount: protectedEpisodes.length
+      }
+    };
+  }
+
+  /**
+   * Add item to Plex watchlist
+   * Uses the discover.provider.plex.tv API
+   */
+  async addToPlexWatchlist(ratingKey) {
+    try {
+      // Plex watchlist uses GUIDs, so we need to get the item's GUID first
+      // For discover items, we can use the ratingKey directly
+      const response = await axios.put(
+        `https://discover.provider.plex.tv/actions/addToWatchlist`,
+        null,
+        {
+          params: {
+            ratingKey: ratingKey
+          },
+          headers: {
+            'X-Plex-Token': this.token,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json'
+          }
+        }
+      );
+      return { success: true };
+    } catch (error) {
+      console.error('[Plex] Error adding to watchlist:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Remove item from Plex watchlist by ratingKey
+   */
+  async removeFromPlexWatchlist(ratingKey) {
+    try {
+      const response = await axios.put(
+        `https://discover.provider.plex.tv/actions/removeFromWatchlist`,
+        null,
+        {
+          params: {
+            ratingKey: ratingKey
+          },
+          headers: {
+            'X-Plex-Token': this.token,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json'
+          }
+        }
+      );
+      return { success: true };
+    } catch (error) {
+      console.error('[Plex] Error removing from watchlist:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Remove item from Plex watchlist by title and year match
+   * More reliable when we don't have the exact ratingKey
+   */
+  async removeFromPlexWatchlistByTitle(title, year, mediaType) {
+    try {
+      const watchlist = await this.getWatchlist();
+      const item = watchlist.find(w =>
+        w.title?.toLowerCase() === title?.toLowerCase() &&
+        (!year || w.year === year) &&
+        (mediaType === 'movie' ? w.type === 'movie' : w.type === 'show')
+      );
+
+      if (item && item.ratingKey) {
+        return await this.removeFromPlexWatchlist(item.ratingKey);
+      }
+
+      return { success: false, error: 'Item not found in Plex watchlist' };
+    } catch (error) {
+      console.error('[Plex] Error removing from watchlist by title:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Search Plex discover for an item (to get ratingKey for watchlist operations)
+   */
+  async searchDiscover(query, mediaType = null) {
+    try {
+      const searchType = mediaType === 'movie' ? 1 : mediaType === 'tv' ? 2 : null;
+      const response = await axios.get(
+        'https://discover.provider.plex.tv/library/search',
+        {
+          params: {
+            query: query,
+            searchTypes: searchType || 'movie,show',
+            limit: 10
+          },
+          headers: {
+            'X-Plex-Token': this.token,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json'
+          }
+        }
+      );
+      return response.data.MediaContainer?.Metadata || [];
+    } catch (error) {
+      console.error('[Plex] Error searching discover:', error.message);
+      return [];
+    }
+  }
+}
+
+module.exports = PlexService;

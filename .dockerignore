@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Node modules
+node_modules
+*/node_modules
+
+# Build artifacts
+frontend/build
+*.log
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (mounted as volume)
+backend/data
+data
+
+# Documentation
+*.md
+!README.md
+docs
+
+# Development
+.env.local
+.env.development
+docker-compose.override.yml

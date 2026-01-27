@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build output
+frontend/build/
+dist/
+
+# Data
+backend/data/
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+coverage/
+.nyc_output/
+
+# Documentation (keep only README)
+*.md
+!README.md
+
+# Development files
+flexerr/
+*.bak
+*.tmp
+
+# Development/debug scripts
+analyze-*.js
+test-*.js
+check-*.js
+set-*.js
+retry-*.js
