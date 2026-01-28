@@ -3032,6 +3032,77 @@ app.post('/api/protection/:mediaType/:tmdbId', authenticate, async (req, res) =>
           title,
           user_id: req.user.userId
         });
+
+        // Monitor in Sonarr/Radarr and trigger search to ensure all content is available
+        try {
+          if (mediaType === 'tv') {
+            // Find and monitor TV show in Sonarr
+            const sonarrs = SonarrService.getAllFromDb();
+            for (const sonarr of sonarrs) {
+              const series = await sonarr.getSeries();
+              const match = series.find(s => {
+                // Try to match by TMDB ID or title
+                const tmdbMatch = s.tvdbId && s.tvdbId === parseInt(tmdbId);
+                const titleMatch = title && (
+                  s.title.toLowerCase() === title.toLowerCase() ||
+                  s.sortTitle?.toLowerCase() === title.toLowerCase()
+                );
+                return tmdbMatch || titleMatch;
+              });
+
+              if (match) {
+                console.log(`[Protection] Found "${title}" in Sonarr, monitoring all episodes...`);
+
+                // Set series to monitored
+                if (!match.monitored) {
+                  match.monitored = true;
+                  await sonarr.client.put(`/series/${match.id}`, match);
+                  console.log(`[Protection] Set series "${title}" to monitored`);
+                }
+
+                // Get all episodes and monitor them
+                const episodes = await sonarr.getEpisodes(match.id);
+                const unmonitoredIds = episodes.filter(e => !e.monitored).map(e => e.id);
+
+                if (unmonitoredIds.length > 0) {
+                  await sonarr.client.put('/episode/monitor', {
+                    episodeIds: unmonitoredIds,
+                    monitored: true
+                  });
+                  console.log(`[Protection] Monitored ${unmonitoredIds.length} episodes for "${title}"`);
+                }
+
+                // Trigger series search to download any missing episodes
+                await sonarr.searchSeries(match.id);
+                console.log(`[Protection] Triggered search for all episodes of "${title}"`);
+                break;
+              }
+            }
+          } else if (mediaType === 'movie') {
+            // Find and monitor movie in Radarr
+            const radarrs = RadarrService.getAllFromDb();
+            for (const radarr of radarrs) {
+              const movies = await radarr.getMovies();
+              const match = movies.find(m => {
+                // Try to match by TMDB ID or title
+                const tmdbMatch = m.tmdbId && m.tmdbId === parseInt(tmdbId);
+                const titleMatch = title && m.title.toLowerCase() === title.toLowerCase();
+                return tmdbMatch || titleMatch;
+              });
+
+              if (match && !match.monitored) {
+                console.log(`[Protection] Found "${title}" in Radarr, setting to monitored...`);
+                match.monitored = true;
+                await radarr.client.put(`/movie/${match.id}`, match);
+                console.log(`[Protection] Set movie "${title}" to monitored`);
+                break;
+              }
+            }
+          }
+        } catch (sonarrRadarrErr) {
+          console.error('[Protection] Error updating Sonarr/Radarr monitoring:', sonarrRadarrErr.message);
+          // Don't fail the protection if Sonarr/Radarr update fails
+        }
       }
       res.json({ protected: true, message: 'Protection added' });
     }
