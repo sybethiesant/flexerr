@@ -1,20 +1,22 @@
 # Flexerr
 
-**Media Request & Lifecycle Management for Plex**
+**Media Request & Lifecycle Management for Plex & Jellyfin**
 
-Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their Plex watchlist, Flexerr automatically downloads it via Sonarr/Radarr, and intelligently cleans it up when everyone's done watching.
+Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr automatically downloads it via Sonarr/Radarr, and intelligently cleans it up when everyone's done watching.
 
 ## Features
 
-- **Plex OAuth Authentication** - Sign in with your Plex account, multi-user support
-- **Watchlist Integration** - Sync with Plex watchlists for automatic requests
+- **Multi-Server Support** - Works with Plex (OAuth) and Jellyfin (username/password)
+- **Watchlist Integration** - Sync with Plex watchlists or Jellyfin favorites for automatic requests
 - **Auto-Download** - Watchlist additions trigger Sonarr/Radarr downloads automatically
 - **Smart Episode Manager** - Intelligent episode cleanup based on user watch velocity
-- **Leaving Soon Collection** - Grace period before deletion with Plex collection visibility
+- **Media Protection** - Protect specific movies/shows from any cleanup rules
+- **Leaving Soon Collection** - Grace period before deletion with collection visibility
 - **Watchlist Restoration** - Re-adding to watchlist triggers re-download of deleted content
 - **Rules Engine** - Flexible cleanup rules based on watch status, age, ratings, and more
 - **Media Repair** - Quality upgrades and Dolby Vision Profile 5 conversion
 - **Multi-User Support** - Each user has their own watchlist and viewing history
+- **Connected Services Management** - Configure and test services from the Settings page
 
 ## How It Works
 
@@ -22,7 +24,7 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 User Watchlist → Auto-Download → Watch → Smart Cleanup → Re-watchlist Restores
 ```
 
-1. User adds content to their Plex watchlist
+1. User adds content to their Plex watchlist or Jellyfin favorites
 2. Flexerr detects the addition and sends to Sonarr/Radarr
 3. Content downloads automatically
 4. User watches the content
@@ -31,12 +33,14 @@ User Watchlist → Auto-Download → Watch → Smart Cleanup → Re-watchlist Re
 7. If user re-adds to watchlist, content is restored
 8. Otherwise, content is cleaned up to save storage
 
+**Note:** Protected items bypass all cleanup rules regardless of other settings.
+
 ## Quick Start
 
 ### Requirements
 
 - **Docker** and **Docker Compose**
-- **Plex Media Server** with OAuth enabled
+- **Plex Media Server** with OAuth enabled OR **Jellyfin** server
 - **Sonarr** (for TV shows)
 - **Radarr** (for movies)
 - **TMDB API Key** ([get one free](https://www.themoviedb.org/settings/api))
@@ -56,7 +60,9 @@ docker compose up -d
 
 3. Open http://localhost:3100 in your browser
 
-4. Sign in with your Plex account (first user becomes admin)
+4. Choose your media server type:
+   - **Plex**: Sign in with your Plex account (first user becomes admin)
+   - **Jellyfin**: Enter your server URL and login credentials
 
 5. Complete the setup wizard:
    - Enter your TMDB API key
@@ -134,13 +140,14 @@ The Smart Episode Manager intelligently manages TV show episodes based on each u
 3. **Smart Buffer** - Keeps enough episodes ahead based on watch speed
 4. **Safe Cleanup** - Only deletes when ALL active users have moved past
 5. **Proactive Redownload** - Re-downloads episodes before slower users need them
+6. **Respects Protection** - Never deletes protected items regardless of velocity
 
 ### Key Settings
 
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Days Buffer | Days of watching to keep ahead | 10 |
-| Max Episodes Ahead | Hard cap on episodes to keep | 20 |
+| Max Episodes Ahead | Hard cap on episodes to keep | 200 |
 | Unknown Velocity Buffer | Fallback when velocity unknown | 10 |
 | Min Velocity Samples | Episodes needed to trust velocity | 3 |
 | Proactive Redownload | Auto-redownload deleted episodes | Enabled |
@@ -153,6 +160,24 @@ The Smart Episode Manager intelligently manages TV show episodes based on each u
 - Flexerr waits for User B to catch up
 - When User B finishes S1, those episodes are cleaned up
 - If User B suddenly speeds up, Flexerr detects the velocity change and ensures episodes are available
+
+## Media Protection
+
+Protect specific movies or TV shows from any deletion - a priority override for all cleanup rules.
+
+### How to Protect Media
+
+1. Navigate to any movie or TV show detail page
+2. Click the **Shield** icon to toggle protection ON
+3. Protected items display a shield badge
+
+### Protection Behavior
+
+- **Priority 1 Override** - Protected items are NEVER deleted by any rule
+- **Bypasses Smart Cleanup** - Ignored by velocity-based episode management
+- **Bypasses Rules Engine** - Ignored by all cleanup rules
+- **Stats Visibility** - Protected items shown separately in cleanup stats
+- **Persistent** - Protection remains until manually toggled off
 
 ## Rules Engine
 
@@ -177,10 +202,12 @@ Create custom cleanup rules for content that doesn't fit the smart cleanup model
 | Action | Description |
 |--------|-------------|
 | Add to Leaving Soon | Queue for deletion with grace period |
-| Delete from Plex | Remove from Plex library |
+| Delete from Plex/Jellyfin | Remove from media server |
 | Delete from Sonarr/Radarr | Remove from *arr apps |
 | Unmonitor | Stop tracking for upgrades |
 | Delete Files | Remove actual media files |
+
+**Note:** Protected items are always skipped by rules, regardless of conditions.
 
 ### Example Rules
 
@@ -202,9 +229,18 @@ Create custom cleanup rules for content that doesn't fit the smart cleanup model
 
 Flexerr uses Plex OAuth - no manual token setup needed. The first user to sign in becomes the admin. Additional users are automatically synced from your Plex server.
 
+### Jellyfin (Beta)
+
+Jellyfin uses username/password authentication:
+1. Enter your Jellyfin server URL during setup
+2. Login with your Jellyfin credentials
+3. The first user to sign in becomes the admin
+
+**Note:** Jellyfin uses Favorites as a watchlist equivalent since Jellyfin lacks native watchlist support.
+
 ### Sonarr / Radarr
 
-1. Go to Settings → Services
+1. Go to Settings → Connected Services
 2. Click "Add Service"
 3. Select Sonarr or Radarr
 4. Enter:
@@ -228,7 +264,7 @@ The admin dashboard provides:
 - **Rules Management** - Create, edit, and run cleanup rules
 - **Queue** - View and manage pending deletions
 - **Logs** - Activity and error logging
-- **Services** - Manage connected services
+- **Connected Services** - Manage media server and download managers
 
 ## Troubleshooting
 
@@ -238,9 +274,15 @@ The admin dashboard provides:
 - Check that your Plex server is accessible from Flexerr
 - Verify no firewall blocking the connection
 
+### Jellyfin sign-in not working
+
+- Verify the server URL is correct and accessible
+- Check username/password are correct
+- Ensure Jellyfin server is running and accepting connections
+
 ### Downloads not starting
 
-- Verify Sonarr/Radarr connection in Services
+- Verify Sonarr/Radarr connection in Connected Services
 - Check that the content has a TVDB/TMDB ID
 - Ensure Sonarr/Radarr have root folders and quality profiles configured
 
@@ -248,12 +290,13 @@ The admin dashboard provides:
 
 - Check Settings → Smart Episode Manager is enabled
 - Verify the cleanup schedule is set
-- Check Plex Sync is enabled and running
+- Check Media Server Sync is enabled and running
 
 ### Content deleted too soon
 
 - Increase "Days Buffer" in Smart Episode Manager
 - Add content to watchlist to protect it
+- **Use the Protect toggle** on the media detail page for permanent protection
 - Check "Leaving Soon" collection for upcoming deletions
 
 ## API Reference
@@ -262,6 +305,7 @@ The admin dashboard provides:
 ```
 POST /api/auth/plex/start     - Start Plex OAuth flow
 GET  /api/auth/plex/callback  - Complete OAuth
+POST /api/jellyfin/auth       - Jellyfin authentication
 POST /api/auth/refresh        - Refresh JWT token
 GET  /api/auth/me             - Get current user
 ```
@@ -281,6 +325,12 @@ POST   /api/watchlist         - Add to watchlist
 DELETE /api/watchlist/:id     - Remove from watchlist
 ```
 
+### Protection
+```
+GET  /api/protection/:mediaType/:tmdbId  - Get protection status
+POST /api/protection/:mediaType/:tmdbId  - Toggle protection
+```
+
 ### Admin (requires admin role)
 ```
 GET  /api/rules               - List rules
@@ -295,8 +345,8 @@ POST /api/services            - Add service
 
 - **Frontend**: React 18, Tailwind CSS, Vite
 - **Backend**: Node.js, Express, SQLite (better-sqlite3)
-- **Authentication**: Plex OAuth, JWT
-- **APIs**: TMDB, Sonarr, Radarr, Plex
+- **Authentication**: Plex OAuth, Jellyfin Auth, JWT
+- **APIs**: TMDB, Sonarr, Radarr, Plex, Jellyfin
 
 ## Project Structure
 
@@ -306,14 +356,19 @@ flexerr/
 │   ├── server.js           # Express server & routes
 │   ├── database.js         # SQLite database
 │   └── services/
-│       ├── auth.js         # Plex OAuth + JWT
+│       ├── auth.js         # Plex OAuth + Jellyfin Auth + JWT
 │       ├── plex.js         # Plex API client
 │       ├── sonarr.js       # Sonarr integration
 │       ├── radarr.js       # Radarr integration
 │       ├── tmdb.js         # TMDB API
 │       ├── rules-engine.js # Cleanup rules
 │       ├── smart-episodes.js # Smart cleanup
-│       └── scheduler.js    # Job scheduling
+│       ├── scheduler.js    # Job scheduling
+│       └── media-server/   # Multi-server abstraction
+│           ├── media-server.js
+│           ├── plex-media-server.js
+│           ├── jellyfin-media-server.js
+│           └── media-server-factory.js
 ├── frontend/src/
 │   ├── App.jsx             # Routes & auth context
 │   └── pages/              # Page components

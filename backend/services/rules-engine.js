@@ -34,6 +34,25 @@ class RulesEngine {
   }
 
   // Get all active rules sorted by priority
+
+  /**
+   * Check if a media item is manually protected from deletion
+   */
+  isManuallyProtected(tmdbId, mediaType) {
+    if (!tmdbId || !mediaType) return { protected: false, reason: null };
+    const normalizedType = mediaType === 'show' ? 'tv' : mediaType;
+    try {
+      const protection = db.prepare(`
+        SELECT * FROM exclusions WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+      `).get(parseInt(tmdbId), normalizedType);
+      if (protection) return { protected: true, reason: 'Manually protected from deletion' };
+      return { protected: false, reason: null };
+    } catch (err) {
+      console.error('[Protection] Error:', err.message);
+      return { protected: false, reason: null };
+    }
+  }
+
   getActiveRules() {
     return db.prepare(`
       SELECT * FROM rules
@@ -614,6 +633,35 @@ class RulesEngine {
 
     const { item, context } = match;
     const results = [];
+
+
+    // CHECK: Manual protection - Priority 1 bypass
+    // Extract TMDB ID from item guids for protection check
+    let checkTmdbId = null;
+    if (item.guids && Array.isArray(item.guids)) {
+      const tmdbGuid = item.guids.find(g => g.includes('tmdb://'));
+      if (tmdbGuid) {
+        checkTmdbId = parseInt(tmdbGuid.replace('tmdb://', ''));
+      }
+    }
+
+    if (checkTmdbId) {
+      const protectionCheck = this.isManuallyProtected(checkTmdbId, item.type);
+      if (protectionCheck.protected) {
+        log('info', 'rules', 'Skipped due to manual protection', {
+          title: item.title,
+          tmdb_id: checkTmdbId,
+          rule_id: rule.id,
+          rule_name: rule.name
+        });
+        return [{
+          action: 'skipped',
+          success: true,
+          message: protectionCheck.reason,
+          skippedDueToProtection: true
+        }];
+      }
+    }
 
     const collectionName = getSetting('collection_name') || 'Leaving Soon';
     const collectionDesc = getSetting('collection_description') || '';

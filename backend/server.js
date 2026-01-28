@@ -2961,6 +2961,99 @@ app.post('/api/exclusions', authenticate, requireAdmin, (req, res) => {
   }
 });
 
+
+// =====================================================
+// MEDIA PROTECTION API
+// =====================================================
+
+// Get protection status for a media item
+app.get('/api/protection/:mediaType/:tmdbId', authenticate, async (req, res) => {
+  const { mediaType, tmdbId } = req.params;
+
+  if (!['movie', 'tv'].includes(mediaType)) {
+    return res.status(400).json({ error: 'Invalid media type' });
+  }
+
+  try {
+    const protection = db.prepare(`
+      SELECT * FROM exclusions
+      WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+    `).get(parseInt(tmdbId), mediaType);
+
+    res.json({
+      protected: !!protection,
+      protection: protection || null
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Toggle protection for a media item
+app.post('/api/protection/:mediaType/:tmdbId', authenticate, async (req, res) => {
+  const { mediaType, tmdbId } = req.params;
+  const { title, protect } = req.body;
+
+  if (!['movie', 'tv'].includes(mediaType)) {
+    return res.status(400).json({ error: 'Invalid media type' });
+  }
+
+  try {
+    const existing = db.prepare(`
+      SELECT * FROM exclusions
+      WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+    `).get(parseInt(tmdbId), mediaType);
+
+    if (protect === false || (protect === undefined && existing)) {
+      if (existing) {
+        db.prepare(`
+          DELETE FROM exclusions
+          WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+        `).run(parseInt(tmdbId), mediaType);
+
+        log('info', 'protection', 'Media protection removed', {
+          tmdb_id: parseInt(tmdbId),
+          media_type: mediaType,
+          title,
+          user_id: req.user.userId
+        });
+      }
+      res.json({ protected: false, message: 'Protection removed' });
+    } else {
+      if (!existing) {
+        db.prepare(`
+          INSERT INTO exclusions (type, tmdb_id, media_type, title, reason, created_at)
+          VALUES ('manual_protection', ?, ?, ?, 'Manual protection by user', CURRENT_TIMESTAMP)
+        `).run(parseInt(tmdbId), mediaType, title || 'Unknown');
+
+        log('info', 'protection', 'Media protection added', {
+          tmdb_id: parseInt(tmdbId),
+          media_type: mediaType,
+          title,
+          user_id: req.user.userId
+        });
+      }
+      res.json({ protected: true, message: 'Protection added' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all protected media (admin only)
+app.get('/api/protection', authenticate, requireAdmin, (req, res) => {
+  try {
+    const protectedItems = db.prepare(`
+      SELECT * FROM exclusions
+      WHERE type = 'manual_protection'
+      ORDER BY created_at DESC
+    `).all();
+    res.json(protectedItems);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Remove from exclusions (admin only)
 app.delete('/api/exclusions/:id', authenticate, requireAdmin, (req, res) => {
   const { id } = req.params;

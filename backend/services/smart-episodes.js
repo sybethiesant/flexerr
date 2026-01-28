@@ -50,6 +50,38 @@ class SmartEpisodeManager {
   }
 
   /**
+   * Check if a media item is manually protected from deletion
+   * @param {number} tmdbId - TMDB ID
+   * @param {string} mediaType - 'movie' or 'tv'
+   * @returns {Object} { protected: boolean, reason: string|null }
+   */
+  isManuallyProtected(tmdbId, mediaType) {
+    if (!tmdbId || !mediaType) {
+      return { protected: false, reason: null };
+    }
+
+    try {
+      const protection = db.prepare(`
+        SELECT * FROM exclusions
+        WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+      `).get(tmdbId, mediaType);
+
+      if (protection) {
+        return {
+          protected: true,
+          reason: 'Manually protected from deletion'
+        };
+      }
+
+      return { protected: false, reason: null };
+    } catch (err) {
+      console.error('[Protection] Error checking protection status:', err.message);
+      return { protected: false, reason: null };
+    }
+  }
+
+
+  /**
    * Convert velocity position back to season/episode
    */
   fromVelocityPosition(position) {
@@ -936,6 +968,19 @@ class SmartEpisodeManager {
     // Calculate velocity position for this episode (season * 100 + episode)
     // This must match how velocity data stores positions
     const episodeVelocityPos = this.toVelocityPosition(episode.seasonNumber, episode.episodeNumber);
+
+    // CHECK 0: Manual protection - Priority 1 bypass (highest priority)
+    // This check must come FIRST to ensure protected items are never deleted
+    if (context.tmdbId) {
+      const protectionCheck = this.isManuallyProtected(context.tmdbId, 'tv');
+      if (protectionCheck.protected) {
+        return {
+          safe: false,
+          reason: protectionCheck.reason
+        };
+      }
+    }
+
 
     // CHECK 1: Watchlist grace period - protect ALL episodes for shows where users haven't started
     // This protects against re-downloads being deleted due to Plex preserving view history
@@ -1967,6 +2012,34 @@ class SmartEpisodeManager {
             SELECT COUNT(*) as count FROM watchlist
             WHERE title = ? AND media_type = 'movie' AND is_active = 1
           `).get(movie.title)?.count > 0;
+
+
+          // Extract TMDB ID from guids for protection check
+          let movieTmdbId = null;
+          if (movie.guids) {
+            const tmdbGuid = movie.guids.find(g => {
+              const guidStr = g.id || g;
+              return guidStr.includes('tmdb://');
+            });
+            if (tmdbGuid) {
+              const guidStr = tmdbGuid.id || tmdbGuid;
+              movieTmdbId = parseInt(guidStr.replace('tmdb://', ''));
+            }
+          }
+
+          // CHECK: Manual protection - Priority 1 bypass
+          if (movieTmdbId) {
+            const protectionCheck = this.isManuallyProtected(movieTmdbId, 'movie');
+            if (protectionCheck.protected) {
+              results.protected.push({
+                title: movie.title,
+                year: movie.year,
+                tmdbId: movieTmdbId,
+                reason: protectionCheck.reason
+              });
+              continue; // Skip this movie entirely
+            }
+          }
 
           // Determine if safe to delete
           let safeToDelete = false;

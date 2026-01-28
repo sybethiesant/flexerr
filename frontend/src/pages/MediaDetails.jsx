@@ -5,7 +5,7 @@ import {
   ArrowLeft, Star, Clock, Calendar, Heart, Check, Loader2,
   Film, Tv, Play, ExternalLink, Users, AlertCircle, Wrench, X,
   AlertTriangle, Zap, Trash2, RefreshCw, ChevronRight, ChevronLeft,
-  Eye, EyeOff, MonitorPlay, BarChart3, Database, Activity
+  Eye, EyeOff, MonitorPlay, BarChart3, Database, Activity, Shield, ShieldCheck
 } from 'lucide-react';
 
 // Season Episodes Modal - Shows episodes with watch buttons
@@ -301,7 +301,7 @@ function SeasonEpisodesModal({ isOpen, onClose, tmdbId, seasonNumber, showTitle,
                               <div className="flex flex-wrap gap-2 mt-1">
                                 {statsData.watch_history.slice(0, 5).map(wh => (
                                   <span key={wh.id} className="text-xs bg-slate-700 px-2 py-1 rounded">
-                                    {wh.username} • {new Date(wh.watched_at).toLocaleDateString()}
+                                    {wh.username} - {new Date(wh.watched_at).toLocaleDateString()}
                                   </span>
                                 ))}
                               </div>
@@ -690,7 +690,7 @@ function ReplacementModal({ isOpen, onClose, tmdbId, mediaType, title, onSubmit 
 }
 
 // Media Statistics Modal (Admin only)
-function StatsModal({ isOpen, onClose, tmdbId, mediaType, title }) {
+function StatsModal({ isOpen, onClose, tmdbId, mediaType, title, isProtected }) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -757,8 +757,21 @@ function StatsModal({ isOpen, onClose, tmdbId, mediaType, title }) {
               {/* Title */}
               <div className="text-center pb-2 border-b border-slate-700">
                 <h3 className="text-xl text-white font-medium">{title}</h3>
-                <p className="text-slate-400 text-sm">TMDB ID: {stats.tmdb_id} • {stats.media_type === 'movie' ? 'Movie' : 'TV Series'}</p>
+                <p className="text-slate-400 text-sm">TMDB ID: {stats.tmdb_id} - {stats.media_type === 'movie' ? 'Movie' : 'TV Series'}</p>
               </div>
+
+              {/* Protection Status */}
+              {isProtected && (
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
+                  <div className="flex items-center gap-3">
+                    <ShieldCheck className="h-6 w-6 text-emerald-400" />
+                    <div>
+                      <h4 className="text-sm font-medium text-emerald-400">Protected from Deletion</h4>
+                      <p className="text-xs text-emerald-300/70">This item will be skipped by all cleanup rules and Smart Episode Manager</p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Plex Info */}
               {stats.plex_info && (
@@ -871,11 +884,27 @@ function StatsModal({ isOpen, onClose, tmdbId, mediaType, title }) {
               )}
 
               {/* Queue Items (Scheduled for deletion) */}
-              {stats.queue_items?.length > 0 && (
+              {stats.queue_items?.length > 0 && !isProtected && (
                 <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4">
                   <h4 className="text-sm font-medium text-red-400 mb-3 flex items-center gap-2">
                     <Trash2 className="h-4 w-4" />
                     Scheduled for Deletion
+                  </h4>
+                  {stats.queue_items.map(qi => (
+                    <div key={qi.id} className="text-sm">
+                      <p className="text-white">Rule: {qi.rule_name || 'Unknown'}</p>
+                      <p className="text-slate-400">Scheduled: {formatDate(qi.action_at)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Protected - would have been deleted */}
+              {stats.queue_items?.length > 0 && isProtected && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-amber-400 mb-3 flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4" />
+                    Would Be Scheduled for Deletion (Protected)
                   </h4>
                   {stats.queue_items.map(qi => (
                     <div key={qi.id} className="text-sm">
@@ -938,7 +967,7 @@ function StatsModal({ isOpen, onClose, tmdbId, mediaType, title }) {
                         </div>
                         <div className="text-xs text-slate-500 mt-2">
                           Progress: {rw.totalWatched}/{rw.totalEpisodes} episodes
-                          {rw.velocity > 0 && " • " + rw.velocity.toFixed(1) + " eps/day"}
+                          {rw.velocity > 0 && " - " + rw.velocity.toFixed(1) + " eps/day"}
                         </div>
                       </div>
                     ))}
@@ -991,6 +1020,10 @@ export default function MediaDetails() {
   const [plexWatchUrl, setPlexWatchUrl] = useState(null);
   const [selectedSeason, setSelectedSeason] = useState(null);
 
+  // Protection state
+  const [isProtected, setIsProtected] = useState(false);
+  const [protectionLoading, setProtectionLoading] = useState(false);
+
   useEffect(() => {
     fetchDetails();
   }, [mediaType, id]);
@@ -999,6 +1032,7 @@ export default function MediaDetails() {
   useEffect(() => {
     if (details) {
       fetchPlexWatchUrl();
+      fetchProtectionStatus();
     }
   }, [details, id, mediaType]);
 
@@ -1009,6 +1043,31 @@ export default function MediaDetails() {
     } catch (e) {
       // Not available in Plex
       setPlexWatchUrl(null);
+    }
+  };
+
+  const fetchProtectionStatus = async () => {
+    try {
+      const res = await api.get(`/protection/${mediaType}/${id}`);
+      setIsProtected(res.data.protected);
+    } catch (e) {
+      // Protection check failed - assume not protected
+      setIsProtected(false);
+    }
+  };
+
+  const toggleProtection = async () => {
+    setProtectionLoading(true);
+    try {
+      const res = await api.post(`/protection/${mediaType}/${id}`, {
+        title: details?.title,
+        protect: !isProtected
+      });
+      setIsProtected(res.data.protected);
+    } catch (e) {
+      console.error('Failed to toggle protection:', e);
+    } finally {
+      setProtectionLoading(false);
     }
   };
 
@@ -1135,17 +1194,30 @@ export default function MediaDetails() {
         {/* Poster */}
         <div className="flex-shrink-0">
           {details.poster_path ? (
-            <img
-              src={details.poster_path}
-              alt={details.title}
-              className="w-64 rounded-lg shadow-xl mx-auto md:mx-0"
-            />
+            <div className="relative">
+              <img
+                src={details.poster_path}
+                alt={details.title}
+                className="w-64 rounded-lg shadow-xl mx-auto md:mx-0"
+              />
+              {/* Protection badge on poster */}
+              {isProtected && (
+                <div className="absolute top-2 right-2 bg-emerald-500/90 text-white p-2 rounded-full shadow-lg" title="Protected from deletion">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+              )}
+            </div>
           ) : (
-            <div className="w-64 aspect-[2/3] bg-slate-800 rounded-lg flex items-center justify-center">
+            <div className="w-64 aspect-[2/3] bg-slate-800 rounded-lg flex items-center justify-center relative">
               {mediaType === 'movie' ? (
                 <Film className="h-16 w-16 text-slate-600" />
               ) : (
                 <Tv className="h-16 w-16 text-slate-600" />
+              )}
+              {isProtected && (
+                <div className="absolute top-2 right-2 bg-emerald-500/90 text-white p-2 rounded-full shadow-lg" title="Protected from deletion">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
               )}
             </div>
           )}
@@ -1161,6 +1233,12 @@ export default function MediaDetails() {
                 {mediaType === 'movie' ? 'Movie' : 'TV Series'}
               </span>
               {getStatusBadge()}
+              {isProtected && (
+                <span className="px-3 py-1 rounded-full text-sm font-medium bg-emerald-500/20 text-emerald-400 flex items-center gap-1">
+                  <ShieldCheck className="h-4 w-4" />
+                  Protected
+                </span>
+              )}
             </div>
             <h1 className="text-3xl md:text-4xl font-bold text-white">{details.title}</h1>
             {details.tagline && (
@@ -1281,6 +1359,29 @@ export default function MediaDetails() {
               >
                 <RefreshCw className="h-5 w-5" />
                 <span>Replace Video</span>
+              </button>
+            )}
+
+            {/* Protection Toggle - Show for available content */}
+            {requestStatus === 'available' && (
+              <button
+                onClick={toggleProtection}
+                disabled={protectionLoading}
+                className={`btn flex items-center space-x-2 ${
+                  isProtected
+                    ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                }`}
+                title={isProtected ? 'Remove protection - allow cleanup' : 'Protect from all cleanup rules'}
+              >
+                {protectionLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : isProtected ? (
+                  <ShieldCheck className="h-5 w-5" />
+                ) : (
+                  <Shield className="h-5 w-5" />
+                )}
+                <span>{isProtected ? 'Protected' : 'Protect'}</span>
               </button>
             )}
 
@@ -1424,6 +1525,7 @@ export default function MediaDetails() {
         tmdbId={parseInt(id)}
         mediaType={mediaType}
         title={details.title}
+        isProtected={isProtected}
       />
     </div>
   );
