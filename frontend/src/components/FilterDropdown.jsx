@@ -188,6 +188,7 @@ export default function FilterDropdown({
 
 /**
  * RangeSlider - For year and rating ranges
+ * Uses two overlapping range inputs with pointer-events management
  */
 export function RangeSlider({
   label,
@@ -200,7 +201,7 @@ export function RangeSlider({
   className = ''
 }) {
   const [localValue, setLocalValue] = useState(value);
-  const [isDragging, setIsDragging] = useState(false);
+  const [isDragging, setIsDragging] = useState(null); // 'min', 'max', or null
 
   useEffect(() => {
     if (!isDragging) {
@@ -219,11 +220,15 @@ export function RangeSlider({
   };
 
   const handleMouseUp = () => {
-    setIsDragging(false);
+    setIsDragging(null);
     onChange(localValue);
   };
 
   const isDefault = localValue[0] === min && localValue[1] === max;
+
+  // Calculate thumb positions as percentages
+  const minPercent = ((localValue[0] - min) / (max - min)) * 100;
+  const maxPercent = ((localValue[1] - min) / (max - min)) * 100;
 
   return (
     <div className={`bg-slate-700/50 rounded-lg p-3 ${className}`}>
@@ -239,14 +244,14 @@ export function RangeSlider({
 
         {/* Active range */}
         <div
-          className="absolute top-1/2 -translate-y-1/2 h-1 bg-blue-500 rounded-full"
+          className="absolute top-1/2 -translate-y-1/2 h-1 bg-blue-500 rounded-full pointer-events-none"
           style={{
-            left: `${((localValue[0] - min) / (max - min)) * 100}%`,
-            right: `${100 - ((localValue[1] - min) / (max - min)) * 100}%`
+            left: `${minPercent}%`,
+            right: `${100 - maxPercent}%`
           }}
         />
 
-        {/* Min slider */}
+        {/* Min slider - z-index higher when dragging or when thumbs are close on left side */}
         <input
           type="range"
           min={min}
@@ -254,14 +259,15 @@ export function RangeSlider({
           step={step}
           value={localValue[0]}
           onChange={handleMinChange}
-          onMouseDown={() => setIsDragging(true)}
+          onMouseDown={() => setIsDragging('min')}
+          onTouchStart={() => setIsDragging('min')}
           onMouseUp={handleMouseUp}
           onTouchEnd={handleMouseUp}
-          className="absolute inset-0 w-full appearance-none bg-transparent cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-lg [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
-          style={{ zIndex: localValue[0] > max - (max - min) / 2 ? 1 : 0 }}
+          className="absolute inset-0 w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab [&::-moz-range-thumb]:pointer-events-auto"
+          style={{ zIndex: isDragging === 'min' || minPercent > 50 ? 5 : 3 }}
         />
 
-        {/* Max slider */}
+        {/* Max slider - z-index higher when dragging or when thumbs are close on right side */}
         <input
           type="range"
           min={min}
@@ -269,10 +275,12 @@ export function RangeSlider({
           step={step}
           value={localValue[1]}
           onChange={handleMaxChange}
-          onMouseDown={() => setIsDragging(true)}
+          onMouseDown={() => setIsDragging('max')}
+          onTouchStart={() => setIsDragging('max')}
           onMouseUp={handleMouseUp}
           onTouchEnd={handleMouseUp}
-          className="absolute inset-0 w-full appearance-none bg-transparent cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-lg [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab"
+          className="absolute inset-0 w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-blue-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-grab [&::-moz-range-thumb]:pointer-events-auto"
+          style={{ zIndex: isDragging === 'max' || maxPercent <= 50 ? 5 : 3 }}
         />
       </div>
     </div>

@@ -3,7 +3,7 @@ import { api, useAuth } from '../App';
 import {
   Settings, Clock, Film, RefreshCw, Calendar,
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
-  ChevronDown, ChevronUp, HardDrive, Zap, Video
+  ChevronDown, ChevronUp, HardDrive, Zap, Video, Play
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -251,6 +251,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalSettings, setOriginalSettings] = useState({});
+  const [runningCleanup, setRunningCleanup] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState(null);
 
   useEffect(() => {
     fetchSettings();
@@ -292,6 +294,31 @@ export default function SettingsPage() {
   const resetSettings = () => {
     setSettings(originalSettings);
     setHasChanges(false);
+  };
+
+  const runSmartCleanup = async (dryRun = true) => {
+    setRunningCleanup(true);
+    setCleanupResult(null);
+    try {
+      const res = await api.post('/cleanup/run', { dryRun });
+      setCleanupResult(res.data);
+
+      const epCandidates = res.data.episodes?.deletionCandidates?.length || 0;
+      const movieCandidates = res.data.movies?.deletionCandidates?.length || 0;
+      const epDeleted = res.data.episodes?.deleted?.length || 0;
+      const movieDeleted = res.data.movies?.deleted?.length || 0;
+
+      if (dryRun) {
+        toast.success(`Preview: ${epCandidates} episodes, ${movieCandidates} movies would be cleaned up`);
+      } else {
+        toast.success(`Cleanup complete: ${epDeleted} episodes, ${movieDeleted} movies deleted`);
+      }
+    } catch (err) {
+      console.error('Cleanup failed:', err);
+      toast.error(err.response?.data?.error || 'Cleanup failed');
+    } finally {
+      setRunningCleanup(false);
+    }
   };
 
   const getBool = (key) => settings[key] === 'true';
@@ -427,6 +454,46 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('smart_cleanup_enabled', v)}
           />
         </SettingRow>
+
+        <SettingRow label="Run Now" description="Manually trigger smart cleanup">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => runSmartCleanup(true)}
+              disabled={runningCleanup}
+              className="btn btn-secondary flex items-center gap-2 text-sm"
+            >
+              {runningCleanup ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+              Preview
+            </button>
+            <button
+              onClick={() => runSmartCleanup(false)}
+              disabled={runningCleanup || getBool('dry_run')}
+              className="btn btn-primary flex items-center gap-2 text-sm"
+              title={getBool('dry_run') ? 'Disable Dry Run mode in General settings to run live cleanup' : 'Run cleanup now'}
+            >
+              {runningCleanup ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Run Now
+            </button>
+          </div>
+        </SettingRow>
+
+        {cleanupResult && (
+          <div className="bg-slate-700/50 rounded-lg p-3 text-sm">
+            <div className="font-medium text-white mb-2">Last Run Results:</div>
+            <div className="grid grid-cols-2 gap-2 text-slate-300">
+              <div>Episodes analyzed: {cleanupResult.episodes?.episodesAnalyzed || 0}</div>
+              <div>Movies analyzed: {cleanupResult.movies?.moviesAnalyzed || 0}</div>
+              <div>Episode candidates: {cleanupResult.episodes?.deletionCandidates?.length || 0}</div>
+              <div>Movie candidates: {cleanupResult.movies?.deletionCandidates?.length || 0}</div>
+              {!getBool('dry_run') && (
+                <>
+                  <div>Episodes deleted: {cleanupResult.episodes?.deleted?.length || 0}</div>
+                  <div>Movies deleted: {cleanupResult.movies?.deleted?.length || 0}</div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         <SettingRow label="Cleanup Schedule" description="When to run smart episode cleanup">
           <ScheduleInput
