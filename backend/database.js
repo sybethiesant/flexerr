@@ -802,6 +802,15 @@ const runMigrations = () => {
     db.exec('ALTER TABLE queue_items ADD COLUMN plex_id TEXT');
   }
 
+  // Check and add missing columns to watchlist table
+  const watchlistColumns = db.prepare("PRAGMA table_info(watchlist)").all();
+  const watchlistColumnNames = watchlistColumns.map(c => c.name);
+
+  if (!watchlistColumnNames.includes('imdb_id')) {
+    console.log('[Database] Adding imdb_id column to watchlist table');
+    db.exec('ALTER TABLE watchlist ADD COLUMN imdb_id TEXT');
+  }
+
   // Check and add missing columns to stats_daily table
   const statsColumns = db.prepare("PRAGMA table_info(stats_daily)").all();
   const statsColumnNames = statsColumns.map(c => c.name);
