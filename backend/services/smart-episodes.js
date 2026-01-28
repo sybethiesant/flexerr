@@ -14,6 +14,24 @@ const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
 const NotificationService = require('./notifications');
 
+/**
+ * Normalize a title for fuzzy matching
+ * Handles leetspeak substitutions (1→I, 0→O, 3→E, etc.) and removes special chars
+ */
+function normalizeTitle(title) {
+  if (!title) return '';
+  return title
+    .toLowerCase()
+    .replace(/1/g, 'i')
+    .replace(/0/g, 'o')
+    .replace(/3/g, 'e')
+    .replace(/4/g, 'a')
+    .replace(/5/g, 's')
+    .replace(/7/g, 't')
+    .replace(/8/g, 'b')
+    .replace(/[^a-z0-9]/g, ''); // Remove all non-alphanumeric
+}
+
 class SmartEpisodeManager {
   constructor() {
     this.plex = null;
@@ -349,9 +367,11 @@ class SmartEpisodeManager {
       if (!tmdbId && showInfo?.title) {
         console.log(`[SmartCleanup] No lifecycle entry for ratingKey ${showRatingKey}, searching by title: "${showInfo.title}"`);
 
-        // Search watchlist by title
+        const normalizedPlexTitle = normalizeTitle(showInfo.title);
+
+        // Search watchlist by title - first try exact match, then fuzzy
         const watchlistByTitle = db.prepare(`
-          SELECT DISTINCT tmdb_id FROM watchlist
+          SELECT DISTINCT tmdb_id, title FROM watchlist
           WHERE lower(title) = lower(?)
             AND media_type = 'tv'
             AND is_active = 1
@@ -360,11 +380,27 @@ class SmartEpisodeManager {
 
         if (watchlistByTitle?.tmdb_id) {
           tmdbId = watchlistByTitle.tmdb_id;
-          console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via watchlist title match`);
+          console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via watchlist exact title match`);
         } else {
-          // Try requests table
+          // Fuzzy match: Get all TV watchlist entries and compare normalized titles
+          const allWatchlistTitles = db.prepare(`
+            SELECT DISTINCT tmdb_id, title FROM watchlist
+            WHERE media_type = 'tv' AND is_active = 1
+          `).all();
+
+          for (const entry of allWatchlistTitles) {
+            if (normalizeTitle(entry.title) === normalizedPlexTitle) {
+              tmdbId = entry.tmdb_id;
+              console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via watchlist fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
+              break;
+            }
+          }
+        }
+
+        // If still not found, try requests table
+        if (!tmdbId) {
           const requestByTitle = db.prepare(`
-            SELECT DISTINCT tmdb_id FROM requests
+            SELECT DISTINCT tmdb_id, title FROM requests
             WHERE lower(title) = lower(?)
               AND media_type = 'tv'
             LIMIT 1
@@ -372,7 +408,21 @@ class SmartEpisodeManager {
 
           if (requestByTitle?.tmdb_id) {
             tmdbId = requestByTitle.tmdb_id;
-            console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via requests title match`);
+            console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via requests exact title match`);
+          } else {
+            // Fuzzy match requests too
+            const allRequestTitles = db.prepare(`
+              SELECT DISTINCT tmdb_id, title FROM requests
+              WHERE media_type = 'tv'
+            `).all();
+
+            for (const entry of allRequestTitles) {
+              if (normalizeTitle(entry.title) === normalizedPlexTitle) {
+                tmdbId = entry.tmdb_id;
+                console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via requests fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
+                break;
+              }
+            }
           }
         }
       }
