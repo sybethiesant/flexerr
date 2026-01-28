@@ -42,10 +42,11 @@ docker-compose.override.yml
 coverage/
 .nyc_output/
 
-# Documentation (keep only README and CHANGELOG)
+# Documentation (keep only README, CHANGELOG, and AUDIT_LOG)
 *.md
 !README.md
 !CHANGELOG.md
+!AUDIT_LOG.md
 
 # Development files
 flexerr/
