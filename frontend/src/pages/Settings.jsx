@@ -3,7 +3,8 @@ import { api, useAuth } from '../App';
 import {
   Settings, Clock, Film, RefreshCw, Calendar,
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
-  ChevronDown, ChevronUp, HardDrive, Zap, Video, Play
+  ChevronDown, ChevronUp, HardDrive, Zap, Video, Play,
+  CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -244,6 +245,252 @@ function ScheduleInput({ value, onChange }) {
   );
 }
 
+// Service card component for displaying connected services
+function ServiceCard({ service, onTest, onEdit, onDelete, testing }) {
+  const getServiceIcon = (type) => {
+    switch (type) {
+      case 'plex':
+        return (
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M11.643 0L4.68 12l6.963 12h6.714L11.393 12 18.357 0z" />
+          </svg>
+        );
+      case 'jellyfin':
+        return (
+          <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 .002C7.524.002 3.53 2.144 1.088 5.5L12 22l10.912-16.5C20.47 2.144 16.476.002 12 .002zm0 3.996a4.5 4.5 0 110 9 4.5 4.5 0 010-9z" />
+          </svg>
+        );
+      case 'sonarr':
+        return <Video className="h-6 w-6" />;
+      case 'radarr':
+        return <Film className="h-6 w-6" />;
+      default:
+        return <Server className="h-6 w-6" />;
+    }
+  };
+
+  const getServiceColor = (type) => {
+    switch (type) {
+      case 'plex':
+        return 'text-yellow-400 bg-yellow-500/20';
+      case 'jellyfin':
+        return 'text-purple-400 bg-purple-500/20';
+      case 'sonarr':
+        return 'text-blue-400 bg-blue-500/20';
+      case 'radarr':
+        return 'text-orange-400 bg-orange-500/20';
+      default:
+        return 'text-slate-400 bg-slate-500/20';
+    }
+  };
+
+  return (
+    <div className="bg-slate-700/50 border border-slate-600 rounded-lg p-4">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-lg ${getServiceColor(service.type)}`}>
+            {getServiceIcon(service.type)}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="font-medium text-white">{service.name}</h4>
+              {service.is_default === 1 && (
+                <span className="text-xs bg-primary-500/30 text-primary-300 px-2 py-0.5 rounded">Default</span>
+              )}
+              {service.is_active === 0 && (
+                <span className="text-xs bg-red-500/30 text-red-300 px-2 py-0.5 rounded">Inactive</span>
+              )}
+            </div>
+            <p className="text-sm text-slate-400">{service.url}</p>
+            {service.api_key && (
+              <p className="text-xs text-slate-500 mt-1">API Key: {service.api_key}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onTest(service)}
+            disabled={testing === service.id}
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-600 rounded-lg transition-colors"
+            title="Test Connection"
+          >
+            {testing === service.id ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            onClick={() => onEdit(service)}
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-600 rounded-lg transition-colors"
+            title="Edit"
+          >
+            <Edit2 className="h-4 w-4" />
+          </button>
+          {service.type !== 'plex' && service.type !== 'jellyfin' && (
+            <button
+              onClick={() => onDelete(service)}
+              className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-600 rounded-lg transition-colors"
+              title="Delete"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Service edit modal
+function ServiceModal({ service, onSave, onClose, isNew = false }) {
+  const [formData, setFormData] = useState({
+    type: service?.type || 'sonarr',
+    name: service?.name || '',
+    url: service?.url || '',
+    api_key: '',
+    is_default: service?.is_default === 1,
+    is_active: service?.is_active !== 0
+  });
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await api.post('/services/test', {
+        type: formData.type,
+        url: formData.url,
+        api_key: formData.api_key || service?.api_key_raw
+      });
+      setTestResult(res.data);
+    } catch (err) {
+      setTestResult({ success: false, error: err.response?.data?.error || err.message });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = () => {
+    const data = { ...formData };
+    // Only send api_key if it was changed
+    if (!data.api_key) {
+      delete data.api_key;
+    }
+    onSave(data);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 border border-slate-700 rounded-lg w-full max-w-md">
+        <div className="p-4 border-b border-slate-700">
+          <h3 className="text-lg font-semibold text-white">
+            {isNew ? 'Add Service' : 'Edit Service'}
+          </h3>
+        </div>
+        <div className="p-4 space-y-4">
+          {isNew && (
+            <div>
+              <label className="block text-sm font-medium text-white mb-1">Service Type</label>
+              <select
+                value={formData.type}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value, name: e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1) })}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+              >
+                <option value="sonarr">Sonarr</option>
+                <option value="radarr">Radarr</option>
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-white mb-1">Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+              placeholder="My Sonarr"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-white mb-1">URL</label>
+            <input
+              type="text"
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+              placeholder="http://localhost:8989"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-white mb-1">API Key</label>
+            <input
+              type="password"
+              value={formData.api_key}
+              onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+              placeholder={isNew ? 'Enter API key' : 'Leave blank to keep existing'}
+            />
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.is_default}
+                onChange={(e) => setFormData({ ...formData, is_default: e.target.checked })}
+                className="rounded border-slate-600 bg-slate-700"
+              />
+              Default
+            </label>
+            <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.is_active}
+                onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                className="rounded border-slate-600 bg-slate-700"
+              />
+              Active
+            </label>
+          </div>
+
+          {testResult && (
+            <div className={`p-3 rounded-lg ${testResult.success ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+              <div className="flex items-center gap-2">
+                {testResult.success ? <CheckCircle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                <span className="text-sm">
+                  {testResult.success ? `Connected: ${testResult.name || testResult.serverName || 'OK'}` : testResult.error}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-4 border-t border-slate-700 flex items-center justify-between">
+          <button
+            onClick={handleTest}
+            disabled={testing || !formData.url}
+            className="btn btn-secondary flex items-center gap-2"
+          >
+            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Test
+          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="btn btn-secondary">Cancel</button>
+            <button
+              onClick={handleSave}
+              disabled={!formData.name || !formData.url}
+              className="btn btn-primary"
+            >
+              {isNew ? 'Add' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const [settings, setSettings] = useState({});
@@ -256,8 +503,16 @@ export default function SettingsPage() {
   const [protectionStats, setProtectionStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(false);
 
+  // Services state
+  const [services, setServices] = useState([]);
+  const [loadingServices, setLoadingServices] = useState(true);
+  const [testingService, setTestingService] = useState(null);
+  const [editingService, setEditingService] = useState(null);
+  const [addingService, setAddingService] = useState(false);
+
   useEffect(() => {
     fetchSettings();
+    fetchServices();
   }, []);
 
   const fetchSettings = async () => {
@@ -270,6 +525,18 @@ export default function SettingsPage() {
       toast.error('Failed to load settings');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchServices = async () => {
+    try {
+      const res = await api.get('/services');
+      setServices(res.data);
+    } catch (err) {
+      console.error('Failed to load services:', err);
+      // Don't show error toast on 403 - user might not be admin
+    } finally {
+      setLoadingServices(false);
     }
   };
 
@@ -336,10 +603,63 @@ export default function SettingsPage() {
     }
   };
 
+  // Service management handlers
+  const handleTestService = async (service) => {
+    setTestingService(service.id);
+    try {
+      const res = await api.post(`/services/${service.id}/test`);
+      if (res.data.success) {
+        toast.success(`${service.name}: Connected successfully`);
+      } else {
+        toast.error(`${service.name}: ${res.data.error}`);
+      }
+    } catch (err) {
+      toast.error(`${service.name}: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setTestingService(null);
+    }
+  };
+
+  const handleSaveService = async (data) => {
+    try {
+      if (editingService) {
+        await api.put(`/services/${editingService.id}`, data);
+        toast.success('Service updated');
+      } else {
+        await api.post('/services', data);
+        toast.success('Service added');
+      }
+      fetchServices();
+      setEditingService(null);
+      setAddingService(false);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save service');
+    }
+  };
+
+  const handleDeleteService = async (service) => {
+    if (!window.confirm(`Delete ${service.name}?`)) return;
+    try {
+      await api.delete(`/services/${service.id}`);
+      toast.success('Service deleted');
+      fetchServices();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete service');
+    }
+  };
+
   const getBool = (key) => settings[key] === 'true';
   const getInt = (key, defaultVal = 0) => parseInt(settings[key]) || defaultVal;
   const getFloat = (key, defaultVal = 0) => parseFloat(settings[key]) || defaultVal;
   const getStr = (key, defaultVal = '') => settings[key] || defaultVal;
+
+  // Get media server type
+  const mediaServerType = getStr('media_server_type', 'plex');
+  const mediaServerLabel = mediaServerType === 'jellyfin' ? 'Jellyfin' : 'Plex';
+
+  // Group services by type
+  const mediaServer = services.find(s => s.type === 'plex' || s.type === 'jellyfin');
+  const arrServices = services.filter(s => s.type === 'sonarr' || s.type === 'radarr');
 
   if (loading) {
     return (
@@ -358,7 +678,7 @@ export default function SettingsPage() {
           <h1 className="text-2xl font-bold text-white">Settings</h1>
         </div>
 
-        <SettingSection title="Your Plex Account" icon={Server}>
+        <SettingSection title={`Your ${mediaServerLabel} Account`} icon={Server}>
           <div className="flex items-center gap-4 py-4">
             {user?.thumb && (
               <img src={user.thumb} alt={user.username} className="w-16 h-16 rounded-full" />
@@ -367,7 +687,7 @@ export default function SettingsPage() {
               <p className="text-lg font-medium text-white">{user?.username}</p>
               <p className="text-sm text-slate-400">{user?.email}</p>
               <p className="text-xs text-slate-500 mt-1">
-                Connected via Plex OAuth
+                Connected via {mediaServerLabel}
               </p>
             </div>
           </div>
@@ -409,6 +729,67 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Connected Services */}
+      <SettingSection title="Connected Services" icon={Server}>
+        {loadingServices ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 text-primary-500 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Media Server */}
+            <div>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Media Server</div>
+              {mediaServer ? (
+                <ServiceCard
+                  service={mediaServer}
+                  onTest={handleTestService}
+                  onEdit={setEditingService}
+                  onDelete={handleDeleteService}
+                  testing={testingService}
+                />
+              ) : (
+                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
+                  <p className="text-sm text-slate-400">No media server configured</p>
+                </div>
+              )}
+            </div>
+
+            {/* Arr Services */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Download Managers</div>
+                <button
+                  onClick={() => setAddingService(true)}
+                  className="flex items-center gap-1 text-sm text-primary-400 hover:text-primary-300"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Service
+                </button>
+              </div>
+              {arrServices.length > 0 ? (
+                <div className="space-y-2">
+                  {arrServices.map((service) => (
+                    <ServiceCard
+                      key={service.id}
+                      service={service}
+                      onTest={handleTestService}
+                      onEdit={setEditingService}
+                      onDelete={handleDeleteService}
+                      testing={testingService}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
+                  <p className="text-sm text-slate-400">No Sonarr or Radarr services configured</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </SettingSection>
 
       {/* General Settings */}
       <SettingSection title="General" icon={Settings}>
@@ -526,10 +907,10 @@ export default function SettingsPage() {
             <div>
               <div className="font-medium text-white mb-2">Protection Rules:</div>
               <div className="grid grid-cols-1 gap-1 text-slate-300 text-xs">
-                <div>• {protectionStats.protectionReasons?.minDaysSinceWatch}</div>
-                <div>• {protectionStats.protectionReasons?.velocityBuffer}</div>
-                <div>• {protectionStats.protectionReasons?.maxAhead}</div>
-                <div>• {protectionStats.protectionReasons?.graceperiod}</div>
+                <div>* {protectionStats.protectionReasons?.minDaysSinceWatch}</div>
+                <div>* {protectionStats.protectionReasons?.velocityBuffer}</div>
+                <div>* {protectionStats.protectionReasons?.maxAhead}</div>
+                <div>* {protectionStats.protectionReasons?.graceperiod}</div>
               </div>
             </div>
 
@@ -797,7 +1178,7 @@ export default function SettingsPage() {
             unit="days"
           />
         </SettingRow>
-        <SettingRow label="Collection Name" description="Name of the Plex collection for leaving soon items">
+        <SettingRow label="Collection Name" description={`Name of the ${mediaServerLabel} collection for leaving soon items`}>
           <div className="w-48">
             <TextInput
               value={getStr('collection_name', 'Leaving Soon')}
@@ -805,7 +1186,7 @@ export default function SettingsPage() {
             />
           </div>
         </SettingRow>
-        <SettingRow label="Collection Description" description="Description shown in Plex for the collection">
+        <SettingRow label="Collection Description" description={`Description shown in ${mediaServerLabel} for the collection`}>
           <div className="w-64">
             <TextInput
               value={getStr('collection_description')}
@@ -816,15 +1197,15 @@ export default function SettingsPage() {
         </SettingRow>
       </SettingSection>
 
-      {/* Plex Sync Settings */}
-      <SettingSection title="Plex Sync" icon={RefreshCw} collapsible>
-        <SettingRow label="Enable Plex Sync" description="Sync watch history and library from Plex">
+      {/* Media Server Sync Settings */}
+      <SettingSection title={`${mediaServerLabel} Sync`} icon={RefreshCw} collapsible>
+        <SettingRow label={`Enable ${mediaServerLabel} Sync`} description={`Sync watch history and library from ${mediaServerLabel}`}>
           <Toggle
             checked={settings['plex_sync_enabled'] !== 'false'}
             onChange={(v) => updateSetting('plex_sync_enabled', v)}
           />
         </SettingRow>
-        <SettingRow label="Sync Interval" description="How often to sync with Plex">
+        <SettingRow label="Sync Interval" description={`How often to sync with ${mediaServerLabel}`}>
           <NumberInput
             value={getInt('plex_sync_interval', 60)}
             onChange={(v) => updateSetting('plex_sync_interval', v)}
@@ -833,13 +1214,13 @@ export default function SettingsPage() {
             unit="seconds"
           />
         </SettingRow>
-        <SettingRow label="Auto Import Plex Users" description="Automatically add Plex users to Flexerr">
+        <SettingRow label={`Auto Import ${mediaServerLabel} Users`} description={`Automatically add ${mediaServerLabel} users to Flexerr`}>
           <Toggle
             checked={getBool('auto_import_plex_users')}
             onChange={(v) => updateSetting('auto_import_plex_users', v)}
           />
         </SettingRow>
-        <SettingRow label="Server Owner is Admin" description="Automatically make Plex server owner an admin">
+        <SettingRow label="Server Owner is Admin" description={`Automatically make ${mediaServerLabel} server owner an admin`}>
           <Toggle
             checked={getBool('server_owner_is_admin')}
             onChange={(v) => updateSetting('server_owner_is_admin', v)}
@@ -978,6 +1359,19 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Service Edit Modal */}
+      {(editingService || addingService) && (
+        <ServiceModal
+          service={editingService}
+          isNew={addingService}
+          onSave={handleSaveService}
+          onClose={() => {
+            setEditingService(null);
+            setAddingService(false);
+          }}
+        />
       )}
     </div>
   );
