@@ -141,9 +141,9 @@ app.get('/api/setup/status', (req, res) => {
   res.json({ setupComplete, hasUsers, hasTmdbKey });
 });
 
-// Complete setup (first-time only)
+// Complete setup (first-time only) - supports Plex and Jellyfin
 app.post('/api/setup/complete', async (req, res) => {
-  const { plexToken, plexUrl, services, tmdbApiKey } = req.body;
+  const { serverType, plexToken, plexUrl, jellyfinUrl, jellyfinToken, jellyfinUserId, jellyfinUsername, services, tmdbApiKey } = req.body;
 
   // Check if already set up
   const existingUsers = db.prepare('SELECT COUNT(*) as count FROM users').get();
@@ -151,8 +151,17 @@ app.post('/api/setup/complete', async (req, res) => {
     return res.status(400).json({ error: 'Setup already completed' });
   }
 
-  if (!plexToken || !plexUrl) {
-    return res.status(400).json({ error: 'Plex token and URL required' });
+  // Validate based on server type
+  const effectiveServerType = serverType || 'plex';
+
+  if (effectiveServerType === 'jellyfin') {
+    if (!jellyfinUrl || !jellyfinToken || !jellyfinUserId) {
+      return res.status(400).json({ error: 'Jellyfin URL, token, and user ID required' });
+    }
+  } else {
+    if (!plexToken || !plexUrl) {
+      return res.status(400).json({ error: 'Plex token and URL required' });
+    }
   }
 
   try {
@@ -161,24 +170,62 @@ app.post('/api/setup/complete', async (req, res) => {
       setSetting('tmdb_api_key', tmdbApiKey);
       TMDBService.refreshApiKey();
     }
-    // TMDB will use the built-in default key if none provided
 
-    // Create first user via Plex auth
-    const authResult = await AuthService.setupFirstUser(plexToken, plexUrl);
-    if (!authResult.success) {
-      return res.status(400).json({ error: authResult.error });
+    let authResult;
+
+    if (effectiveServerType === 'jellyfin') {
+      // Create media server entry for Jellyfin
+      const { createOrUpdateUserGeneric, createMediaServer } = require('./database');
+
+      const mediaServer = createMediaServer({
+        type: 'jellyfin',
+        name: 'Jellyfin',
+        url: jellyfinUrl,
+        admin_user_id: jellyfinUserId,
+        admin_token: jellyfinToken,
+        is_primary: true
+      });
+
+      // Create admin user
+      const user = createOrUpdateUserGeneric({
+        server_user_id: jellyfinUserId,
+        server_token: jellyfinToken,
+        username: jellyfinUsername,
+        is_admin: true,
+        is_owner: true,
+        media_server_type: 'jellyfin',
+        media_server_id: mediaServer.id
+      });
+
+      // Generate tokens
+      authResult = {
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          is_admin: true,
+          is_owner: true
+        },
+        ...AuthService.generateTokensForMediaServer(user, 'jellyfin')
+      };
+    } else {
+      // Create first user via Plex auth (existing flow)
+      authResult = await AuthService.setupFirstUser(plexToken, plexUrl);
+      if (!authResult.success) {
+        return res.status(400).json({ error: authResult.error });
+      }
+
+      // Add Plex service
+      db.prepare(`
+        INSERT INTO services (type, name, url, api_key, is_default, is_active)
+        VALUES ('plex', 'Plex', ?, ?, 1, 1)
+      `).run(plexUrl, plexToken);
     }
 
-    // Add Plex service
-    db.prepare(`
-      INSERT INTO services (type, name, url, api_key, is_default, is_active)
-      VALUES ('plex', 'Plex', ?, ?, 1, 1)
-    `).run(plexUrl, plexToken);
-
-    // Add additional services
+    // Add additional services (Sonarr, Radarr)
     if (services && Array.isArray(services)) {
       for (const svc of services) {
-        if (svc.url && svc.type !== 'plex') {
+        if (svc.url && svc.type !== 'plex' && svc.type !== 'jellyfin') {
           db.prepare(`
             INSERT INTO services (type, name, url, api_key, is_default, is_active)
             VALUES (?, ?, ?, ?, 1, 1)
@@ -189,8 +236,12 @@ app.post('/api/setup/complete', async (req, res) => {
 
     // Mark setup as complete
     setSetting('setup_complete', 'true');
+    setSetting('media_server_type', effectiveServerType);
 
-    log('info', 'system', 'Setup completed', { username: authResult.user.username });
+    log('info', 'system', 'Setup completed', {
+      username: authResult.user.username,
+      serverType: effectiveServerType
+    });
 
     // Start the scheduler
     scheduler.start().catch(err => {
@@ -206,6 +257,58 @@ app.post('/api/setup/complete', async (req, res) => {
   } catch (err) {
     console.error('Setup failed:', err);
     res.status(500).json({ error: 'Setup failed: ' + err.message });
+  }
+});
+
+// =====================================================
+// JELLYFIN API ENDPOINTS
+// =====================================================
+
+// Test Jellyfin server connection (no auth required)
+app.post('/api/jellyfin/test', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ success: false, error: 'Server URL required' });
+  }
+
+  try {
+    const cleanUrl = url.replace(/\/$/, '');
+    const response = await axios.get(cleanUrl + '/System/Info/Public', {
+      timeout: 10000
+    });
+
+    res.json({
+      success: true,
+      name: response.data.ServerName,
+      version: response.data.Version,
+      id: response.data.Id
+    });
+  } catch (error) {
+    console.error('[Jellyfin] Connection test failed:', error.message);
+    res.json({
+      success: false,
+      error: error.code === 'ECONNREFUSED' ? 'Could not connect to server' :
+             error.code === 'ENOTFOUND' ? 'Server not found' :
+             error.message
+    });
+  }
+});
+
+// Authenticate with Jellyfin
+app.post('/api/jellyfin/auth', async (req, res) => {
+  const { url, username, password } = req.body;
+
+  if (!url || !username || !password) {
+    return res.status(400).json({ success: false, error: 'URL, username and password required' });
+  }
+
+  try {
+    const result = await AuthService.authenticateJellyfin(url, username, password);
+    res.json(result);
+  } catch (error) {
+    console.error('[Jellyfin] Auth failed:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
