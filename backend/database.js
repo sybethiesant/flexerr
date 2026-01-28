@@ -720,6 +720,45 @@ const initSchema = () => {
 
 // Migration function to add missing columns to existing databases
 const runMigrations = () => {
+  // =====================
+  // MEDIA SERVERS TABLE (for Jellyfin support)
+  // =====================
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_servers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      api_key TEXT,
+      admin_user_id TEXT,
+      admin_token TEXT,
+      is_primary BOOLEAN DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1,
+      settings JSON DEFAULT '{}',
+      last_connected DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_media_servers_type ON media_servers(type);
+  `);
+
+  // Check and add missing columns to users table for multi-server support
+  const userColumns = db.prepare("PRAGMA table_info(users)").all();
+  const userColumnNames = userColumns.map(c => c.name);
+
+  if (!userColumnNames.includes('media_server_type')) {
+    console.log('[Database] Adding media_server_type column to users table');
+    db.exec("ALTER TABLE users ADD COLUMN media_server_type TEXT DEFAULT 'plex'");
+  }
+
+  if (!userColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to users table');
+    db.exec('ALTER TABLE users ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  // Migrate existing plex_id values to ensure backwards compatibility
+  // plex_id remains the user's identifier on the media server (works for both Plex and Jellyfin)
+
   // Check and add missing columns to exclusions table
   const exclusionColumns = db.prepare("PRAGMA table_info(exclusions)").all();
   const exclusionColumnNames = exclusionColumns.map(c => c.name);
@@ -784,6 +823,80 @@ const runMigrations = () => {
   if (!repairColumnNames.includes('tvdb_id')) {
     console.log('[Database] Adding tvdb_id column to repair_requests table');
     db.exec('ALTER TABLE repair_requests ADD COLUMN tvdb_id INTEGER');
+  }
+
+  // Add media_server_id to watch_history for multi-server support
+  const watchHistoryColumns = db.prepare("PRAGMA table_info(watch_history)").all();
+  const watchHistoryColumnNames = watchHistoryColumns.map(c => c.name);
+
+  if (!watchHistoryColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to watch_history table');
+    db.exec('ALTER TABLE watch_history ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  if (!watchHistoryColumnNames.includes('media_item_key')) {
+    console.log('[Database] Adding media_item_key column to watch_history table');
+    db.exec('ALTER TABLE watch_history ADD COLUMN media_item_key TEXT');
+    // Migrate existing plex_rating_key to media_item_key
+    db.exec('UPDATE watch_history SET media_item_key = plex_rating_key WHERE media_item_key IS NULL');
+  }
+
+  // Add media_server_id to lifecycle for multi-server support
+  const lifecycleColumns = db.prepare("PRAGMA table_info(lifecycle)").all();
+  const lifecycleColumnNames = lifecycleColumns.map(c => c.name);
+
+  if (!lifecycleColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to lifecycle table');
+    db.exec('ALTER TABLE lifecycle ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  if (!lifecycleColumnNames.includes('media_item_key')) {
+    console.log('[Database] Adding media_item_key column to lifecycle table');
+    db.exec('ALTER TABLE lifecycle ADD COLUMN media_item_key TEXT');
+    // Migrate existing plex_rating_key to media_item_key
+    db.exec('UPDATE lifecycle SET media_item_key = plex_rating_key WHERE media_item_key IS NULL');
+  }
+
+  // Add media_server_id to episode_stats for multi-server support
+  const episodeStatsColumns = db.prepare("PRAGMA table_info(episode_stats)").all();
+  const episodeStatsColumnNames = episodeStatsColumns.map(c => c.name);
+
+  if (!episodeStatsColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to episode_stats table');
+    db.exec('ALTER TABLE episode_stats ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  if (!episodeStatsColumnNames.includes('media_item_key')) {
+    console.log('[Database] Adding media_item_key column to episode_stats table');
+    db.exec('ALTER TABLE episode_stats ADD COLUMN media_item_key TEXT');
+    // Migrate existing show_rating_key to media_item_key
+    db.exec('UPDATE episode_stats SET media_item_key = show_rating_key WHERE media_item_key IS NULL');
+  }
+
+  // Add media_server_id to queue_items for multi-server support
+  if (!queueColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to queue_items table');
+    db.exec('ALTER TABLE queue_items ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  if (!queueColumnNames.includes('media_item_key')) {
+    console.log('[Database] Adding media_item_key column to queue_items table');
+    db.exec('ALTER TABLE queue_items ADD COLUMN media_item_key TEXT');
+    // Migrate existing plex_rating_key to media_item_key
+    db.exec('UPDATE queue_items SET media_item_key = plex_rating_key WHERE media_item_key IS NULL');
+  }
+
+  // Add media_server_id to exclusions for multi-server support
+  if (!exclusionColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to exclusions table');
+    db.exec('ALTER TABLE exclusions ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  if (!exclusionColumnNames.includes('media_item_key')) {
+    console.log('[Database] Adding media_item_key column to exclusions table');
+    db.exec('ALTER TABLE exclusions ADD COLUMN media_item_key TEXT');
+    // Migrate existing plex_id to media_item_key
+    db.exec('UPDATE exclusions SET media_item_key = plex_id WHERE media_item_key IS NULL');
   }
 };
 
@@ -893,6 +1006,153 @@ const cleanExpiredSessions = () => {
   db.prepare('DELETE FROM sessions WHERE expires_at < CURRENT_TIMESTAMP').run();
 };
 
+// Media server helper functions
+const getMediaServers = () => {
+  return db.prepare('SELECT * FROM media_servers WHERE is_active = 1 ORDER BY is_primary DESC').all();
+};
+
+const getPrimaryMediaServer = () => {
+  return db.prepare('SELECT * FROM media_servers WHERE is_primary = 1 AND is_active = 1').get();
+};
+
+const getMediaServerById = (id) => {
+  return db.prepare('SELECT * FROM media_servers WHERE id = ?').get(id);
+};
+
+const getMediaServerByType = (type) => {
+  return db.prepare('SELECT * FROM media_servers WHERE type = ? AND is_active = 1').get(type);
+};
+
+const createMediaServer = (serverData) => {
+  // If this is the first server or marked as primary, ensure it's the only primary
+  if (serverData.is_primary) {
+    db.prepare('UPDATE media_servers SET is_primary = 0').run();
+  }
+
+  const result = db.prepare(`
+    INSERT INTO media_servers (type, name, url, api_key, admin_user_id, admin_token, is_primary, settings)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    serverData.type,
+    serverData.name,
+    serverData.url,
+    serverData.api_key || null,
+    serverData.admin_user_id || null,
+    serverData.admin_token || null,
+    serverData.is_primary ? 1 : 0,
+    JSON.stringify(serverData.settings || {})
+  );
+
+  return getMediaServerById(result.lastInsertRowid);
+};
+
+const updateMediaServer = (id, updates) => {
+  const fields = [];
+  const values = [];
+
+  if (updates.name !== undefined) {
+    fields.push('name = ?');
+    values.push(updates.name);
+  }
+  if (updates.url !== undefined) {
+    fields.push('url = ?');
+    values.push(updates.url);
+  }
+  if (updates.api_key !== undefined) {
+    fields.push('api_key = ?');
+    values.push(updates.api_key);
+  }
+  if (updates.admin_user_id !== undefined) {
+    fields.push('admin_user_id = ?');
+    values.push(updates.admin_user_id);
+  }
+  if (updates.admin_token !== undefined) {
+    fields.push('admin_token = ?');
+    values.push(updates.admin_token);
+  }
+  if (updates.is_primary !== undefined) {
+    if (updates.is_primary) {
+      db.prepare('UPDATE media_servers SET is_primary = 0').run();
+    }
+    fields.push('is_primary = ?');
+    values.push(updates.is_primary ? 1 : 0);
+  }
+  if (updates.is_active !== undefined) {
+    fields.push('is_active = ?');
+    values.push(updates.is_active ? 1 : 0);
+  }
+  if (updates.settings !== undefined) {
+    fields.push('settings = ?');
+    values.push(JSON.stringify(updates.settings));
+  }
+  if (updates.last_connected !== undefined) {
+    fields.push('last_connected = ?');
+    values.push(updates.last_connected);
+  }
+
+  if (fields.length === 0) return getMediaServerById(id);
+
+  values.push(id);
+  db.prepare(`UPDATE media_servers SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+
+  return getMediaServerById(id);
+};
+
+const deleteMediaServer = (id) => {
+  db.prepare('DELETE FROM media_servers WHERE id = ?').run(id);
+};
+
+// Generic user function that works with any media server type
+const getUserByMediaServerId = (serverUserId, mediaServerType = 'plex') => {
+  return db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_type = ?').get(serverUserId, mediaServerType);
+};
+
+const createOrUpdateUserGeneric = (userData) => {
+  const mediaServerType = userData.media_server_type || 'plex';
+  const existing = getUserByMediaServerId(userData.server_user_id, mediaServerType);
+
+  if (existing) {
+    db.prepare(`
+      UPDATE users SET
+        plex_token = ?,
+        username = ?,
+        email = ?,
+        thumb = ?,
+        is_owner = ?,
+        media_server_type = ?,
+        media_server_id = ?,
+        last_login = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      userData.server_token,
+      userData.username,
+      userData.email || existing.email,
+      userData.thumb || existing.thumb,
+      userData.is_owner ? 1 : existing.is_owner,
+      mediaServerType,
+      userData.media_server_id || existing.media_server_id,
+      existing.id
+    );
+    return getUserById(existing.id);
+  } else {
+    const result = db.prepare(`
+      INSERT INTO users (plex_id, plex_token, username, email, thumb, is_admin, is_owner, media_server_type, media_server_id, last_login)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      userData.server_user_id,
+      userData.server_token,
+      userData.username,
+      userData.email || null,
+      userData.thumb || null,
+      userData.is_admin ? 1 : 0,
+      userData.is_owner ? 1 : 0,
+      mediaServerType,
+      userData.media_server_id || null
+    );
+    return getUserById(result.lastInsertRowid);
+  }
+};
+
 // Initialize on load
 initSchema();
 
@@ -903,11 +1163,23 @@ module.exports = {
   getAllSettings,
   log,
   initSchema,
+  // User functions
   getUserById,
   getUserByPlexId,
   createOrUpdateUser,
+  getUserByMediaServerId,
+  createOrUpdateUserGeneric,
+  // Session functions
   createSession,
   getSessionByTokenHash,
   deleteSession,
-  cleanExpiredSessions
+  cleanExpiredSessions,
+  // Media server functions
+  getMediaServers,
+  getPrimaryMediaServer,
+  getMediaServerById,
+  getMediaServerByType,
+  createMediaServer,
+  updateMediaServer,
+  deleteMediaServer
 };

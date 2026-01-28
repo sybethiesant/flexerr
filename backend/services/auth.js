@@ -1,12 +1,12 @@
 /**
  * Authentication Service for Flexerr
- * Handles Plex OAuth authentication and JWT token management
+ * Handles Plex OAuth and Jellyfin username/password authentication, plus JWT token management
  */
 
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { getSetting, createOrUpdateUser, getUserById, getUserByPlexId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions } = require('../database');
+const { getSetting, createOrUpdateUser, createOrUpdateUserGeneric, getUserById, getUserByPlexId, getUserByMediaServerId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions, getMediaServerByType } = require('../database');
 
 const PLEX_AUTH_URL = 'https://plex.tv/api/v2';
 const PLEX_PRODUCT = 'Flexerr';
@@ -185,6 +185,227 @@ class AuthService {
     return plexService?.url || null;
   }
 
+  // =====================================================
+  // JELLYFIN AUTHENTICATION
+  // =====================================================
+
+  /**
+   * Authenticate with Jellyfin using username and password
+   */
+  async authenticateJellyfin(serverUrl, username, password) {
+    try {
+      const response = await axios.post(
+        `${serverUrl.replace(/\/$/, '')}/Users/AuthenticateByName`,
+        {
+          Username: username,
+          Pw: password
+        },
+        {
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-Emby-Authorization': `MediaBrowser Client="Flexerr", Device="Web", DeviceId="flexerr-${Date.now()}", Version="1.0.0"`
+          }
+        }
+      );
+
+      return {
+        success: true,
+        accessToken: response.data.AccessToken,
+        userId: response.data.User.Id,
+        user: {
+          id: response.data.User.Id,
+          username: response.data.User.Name,
+          isAdmin: response.data.User.Policy?.IsAdministrator || false,
+          thumb: response.data.User.PrimaryImageTag
+            ? `${serverUrl.replace(/\/$/, '')}/Users/${response.data.User.Id}/Images/Primary`
+            : null
+        },
+        serverId: response.data.ServerId
+      };
+    } catch (error) {
+      console.error('[Auth] Jellyfin authentication failed:', error.response?.data?.Message || error.message);
+      return {
+        success: false,
+        error: error.response?.data?.Message || 'Authentication failed'
+      };
+    }
+  }
+
+  /**
+   * Validate a Jellyfin access token
+   */
+  async validateJellyfinToken(serverUrl, accessToken, userId) {
+    try {
+      const response = await axios.get(
+        `${serverUrl.replace(/\/$/, '')}/Users/${userId}`,
+        {
+          headers: {
+            'Accept': 'application/json',
+            'X-Emby-Token': accessToken
+          }
+        }
+      );
+
+      const user = response.data;
+
+      return {
+        success: true,
+        user: {
+          id: user.Id,
+          username: user.Name,
+          isAdmin: user.Policy?.IsAdministrator || false,
+          thumb: user.PrimaryImageTag
+            ? `${serverUrl.replace(/\/$/, '')}/Users/${user.Id}/Images/Primary`
+            : null
+        }
+      };
+    } catch (error) {
+      console.error('[Auth] Jellyfin token validation failed:', error.message);
+      return { success: false, error: 'Invalid Jellyfin token' };
+    }
+  }
+
+  /**
+   * Complete Jellyfin login flow
+   */
+  async loginJellyfin(serverUrl, username, password) {
+    // Authenticate with Jellyfin
+    const authResult = await this.authenticateJellyfin(serverUrl, username, password);
+    if (!authResult.success) {
+      return authResult;
+    }
+
+    // Get the Jellyfin media server configuration
+    const jellyfinServer = getMediaServerByType('jellyfin');
+
+    // Create or update user in database
+    const user = createOrUpdateUserGeneric({
+      server_user_id: authResult.userId,
+      server_token: authResult.accessToken,
+      username: authResult.user.username,
+      thumb: authResult.user.thumb,
+      is_admin: authResult.user.isAdmin,
+      is_owner: authResult.user.isAdmin, // Admin is considered owner for Jellyfin
+      media_server_type: 'jellyfin',
+      media_server_id: jellyfinServer?.id || null
+    });
+
+    // Generate JWT tokens
+    const tokens = this.generateTokensForMediaServer(user, 'jellyfin');
+
+    return {
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        thumb: user.thumb,
+        is_admin: user.is_admin === 1,
+        is_owner: user.is_owner === 1
+      },
+      ...tokens
+    };
+  }
+
+  /**
+   * Generate tokens for any media server type
+   */
+  generateTokensForMediaServer(user, serverType = 'plex') {
+    // Access token (short-lived)
+    const accessToken = jwt.sign(
+      {
+        userId: user.id,
+        serverUserId: user.plex_id, // Works for both Plex and Jellyfin
+        username: user.username,
+        isAdmin: Boolean(user.is_admin),
+        mediaServerType: serverType
+      },
+      this.jwtSecret,
+      { expiresIn: ACCESS_TOKEN_EXPIRY }
+    );
+
+    // Refresh token (longer-lived, stored hashed in DB)
+    const refreshToken = crypto.randomBytes(64).toString('hex');
+    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+    // Store refresh token hash in database
+    createSession(user.id, refreshTokenHash, expiresAt.toISOString());
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: 14400 // 4 hours in seconds
+    };
+  }
+
+  /**
+   * Setup first Jellyfin user (during initial setup)
+   */
+  async setupFirstJellyfinUser(serverUrl, username, password) {
+    // Authenticate with Jellyfin
+    const authResult = await this.authenticateJellyfin(serverUrl, username, password);
+    if (!authResult.success) {
+      return authResult;
+    }
+
+    // First user must be an admin
+    if (!authResult.user.isAdmin) {
+      return {
+        success: false,
+        error: 'First user must be a Jellyfin administrator'
+      };
+    }
+
+    // Create user as admin (first user)
+    const user = createOrUpdateUserGeneric({
+      server_user_id: authResult.userId,
+      server_token: authResult.accessToken,
+      username: authResult.user.username,
+      thumb: authResult.user.thumb,
+      is_admin: true,
+      is_owner: true,
+      media_server_type: 'jellyfin'
+    });
+
+    // Generate tokens
+    const tokens = this.generateTokensForMediaServer(user, 'jellyfin');
+
+    return {
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        thumb: user.thumb,
+        is_admin: true,
+        is_owner: true
+      },
+      jellyfinAccessToken: authResult.accessToken,
+      jellyfinUserId: authResult.userId,
+      serverId: authResult.serverId,
+      ...tokens
+    };
+  }
+
+  /**
+   * Determine which media server type is configured
+   */
+  getConfiguredMediaServerType() {
+    const { db } = require('../database');
+
+    // Check new media_servers table first
+    const jellyfinServer = db.prepare("SELECT * FROM media_servers WHERE type = 'jellyfin' AND is_active = 1").get();
+    if (jellyfinServer) return 'jellyfin';
+
+    // Check legacy services table for Plex
+    const plexService = db.prepare("SELECT * FROM services WHERE type = 'plex' AND is_active = 1").get();
+    if (plexService) return 'plex';
+
+    return null;
+  }
+
   /**
    * Compare two URLs ignoring protocol and trailing slashes
    */
@@ -250,33 +471,8 @@ class AuthService {
    * Generate access and refresh tokens
    */
   generateTokens(user) {
-    // Access token (short-lived)
-    const accessToken = jwt.sign(
-      {
-        userId: user.id,
-        plexId: user.plex_id,
-        username: user.username,
-        isAdmin: Boolean(user.is_admin)
-      },
-      this.jwtSecret,
-      { expiresIn: ACCESS_TOKEN_EXPIRY }
-    );
-
-    // Refresh token (longer-lived, stored hashed in DB)
-    const refreshToken = crypto.randomBytes(64).toString('hex');
-    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
-
-    // Store refresh token hash in database
-    createSession(user.id, refreshTokenHash, expiresAt.toISOString());
-
-    return {
-      accessToken,
-      refreshToken,
-      expiresIn: 14400 // 4 hours in seconds (matches ACCESS_TOKEN_EXPIRY)
-    };
+    // Use the new method with plex as default for backwards compatibility
+    return this.generateTokensForMediaServer(user, user.media_server_type || 'plex');
   }
 
   /**
@@ -354,6 +550,50 @@ class AuthService {
     }
 
     return { success: true };
+  }
+
+  /**
+   * Generic login that determines which auth flow to use
+   * @param {Object} credentials
+   * @param {string} credentials.type - 'plex' or 'jellyfin'
+   * @param {string} credentials.plexToken - For Plex OAuth login
+   * @param {string} credentials.serverUrl - For Jellyfin login
+   * @param {string} credentials.username - For Jellyfin login
+   * @param {string} credentials.password - For Jellyfin login
+   */
+  async loginGeneric(credentials) {
+    const { type } = credentials;
+
+    if (type === 'jellyfin') {
+      const { serverUrl, username, password } = credentials;
+      if (!serverUrl || !username || !password) {
+        return { success: false, error: 'Missing Jellyfin credentials' };
+      }
+
+      // Get configured Jellyfin URL if not provided
+      const configuredUrl = serverUrl || await this.getConfiguredJellyfinUrl();
+      if (!configuredUrl) {
+        return { success: false, error: 'Jellyfin server not configured' };
+      }
+
+      return this.loginJellyfin(configuredUrl, username, password);
+    }
+
+    // Default to Plex
+    const { plexToken } = credentials;
+    if (!plexToken) {
+      return { success: false, error: 'Missing Plex token' };
+    }
+
+    return this.login(plexToken);
+  }
+
+  /**
+   * Get the configured Jellyfin server URL
+   */
+  async getConfiguredJellyfinUrl() {
+    const server = getMediaServerByType('jellyfin');
+    return server?.url || null;
   }
 
   /**

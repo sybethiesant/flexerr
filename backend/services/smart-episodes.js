@@ -9,6 +9,7 @@
  */
 
 const { db, getSetting, log } = require('../database');
+const { MediaServerFactory } = require('./media-server');
 const PlexService = require('./plex');
 const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
@@ -69,15 +70,22 @@ class SmartEpisodeManager {
   }
 
   async initialize() {
-    // Flexerr is Plex-only
-    const plexService = PlexService.fromDb();
+    // Use MediaServerFactory to get the primary media server (Plex or Jellyfin)
+    const mediaServer = MediaServerFactory.getPrimary();
 
-    if (plexService) {
-      this.mediaServer = plexService;
-      this.mediaServerType = 'plex';
+    if (mediaServer) {
+      this.mediaServer = mediaServer;
+      this.mediaServerType = mediaServer.type;
+    } else {
+      // Fallback to legacy PlexService for backwards compatibility
+      const plexService = PlexService.fromDb();
+      if (plexService) {
+        this.mediaServer = plexService;
+        this.mediaServerType = 'plex';
+      }
     }
 
-    // Keep backwards compatibility
+    // Keep backwards compatibility - this.plex refers to the primary media server
     this.plex = this.mediaServer;
 
     this.sonarr = SonarrService.fromDb();

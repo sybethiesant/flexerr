@@ -2,6 +2,39 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.0-beta] - 2026-01-28
+
+### Added
+
+- **Jellyfin Support (Beta)**: Added experimental support for Jellyfin as an alternative to Plex. This is a beta feature and requires community testing.
+
+  **New Backend Components:**
+  - `MediaServer` abstract base class defining unified interface for media servers
+  - `PlexMediaServer` - Refactored Plex implementation using the new interface
+  - `JellyfinMediaServer` - New Jellyfin implementation with full API support
+  - `MediaServerFactory` - Factory for instantiating the appropriate server type
+  - `media-sync.js` - Generalized sync service that works with any media server
+
+  **Database Schema Updates:**
+  - New `media_servers` table for storing server configurations
+  - Added `media_server_type` and `media_server_id` columns to `users` table
+  - Added `media_server_id` and `media_item_key` columns to tracking tables
+
+  **Authentication:**
+  - Jellyfin uses username/password authentication (Plex uses OAuth)
+  - Added `authenticateJellyfin()`, `loginJellyfin()`, and `setupFirstJellyfinUser()` methods
+
+  **Jellyfin Feature Workarounds:**
+  - Uses Jellyfin **Favorites** as watchlist equivalent (Jellyfin lacks native watchlist)
+  - Watch history retrieved via played items with `IsPlayed` filter
+  - External IDs (TMDB, TVDB, IMDB) extracted from Jellyfin's `ProviderIds`
+
+### Notes
+
+- Jellyfin support requires additional testing - please report issues on GitHub
+- Setup page UI changes for server type selection coming in next update
+- Existing Plex installations are unaffected - this is additive functionality
+
 ## [1.0.1] - 2026-01-28
 
 ### Fixed
