@@ -21,11 +21,15 @@ const syncState = {
   lastLibrarySync: null,
   lastWatchHistorySync: null,
   lastUserSync: null,
+  lastLifecycleRepair: null,
   libraryCache: new Map(), // ratingKey -> { title, addedAt, type }
   isRunning: false,
   consecutiveErrors: 0,
   lastError: null
 };
+
+// Lifecycle repair interval (5 minutes)
+const LIFECYCLE_REPAIR_INTERVAL = 5 * 60 * 1000;
 
 // Rate limiting - minimum ms between API calls
 const API_DELAY = 100;
@@ -36,6 +40,40 @@ const ERROR_BACKOFF_MS = 30000; // 30 seconds backoff after errors
  * Sleep helper for rate limiting
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Extract TMDB ID from Plex GUIDs array
+ * GUIDs format: ['tmdb://225171', 'tvdb://12345', 'imdb://tt1234567']
+ */
+function extractTmdbIdFromGuids(guids) {
+  if (!guids || !Array.isArray(guids)) return null;
+  for (const guid of guids) {
+    const str = typeof guid === 'string' ? guid : guid?.id;
+    if (str && str.startsWith('tmdb://')) {
+      const id = parseInt(str.replace('tmdb://', ''), 10);
+      if (id > 0) return id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Normalize a title for fuzzy matching
+ * Handles leetspeak substitutions (1→I, 0→O, 3→E, etc.)
+ */
+function normalizeTitle(title) {
+  if (!title) return '';
+  return title
+    .toLowerCase()
+    .replace(/1/g, 'i')
+    .replace(/0/g, 'o')
+    .replace(/3/g, 'e')
+    .replace(/4/g, 'a')
+    .replace(/5/g, 's')
+    .replace(/7/g, 't')
+    .replace(/8/g, 'b')
+    .replace(/[^a-z0-9]/g, '');
+}
 
 /**
  * Load sync state from database
@@ -475,12 +513,73 @@ async function processLibraryChanges(changes) {
   const { added, removed, updated } = changes;
 
   // Process new items
+  const plex = getPlexService();
+
   for (const item of added) {
-    // Check if this matches a pending request (by title/year)
-    const request = db.prepare(`
-      SELECT * FROM requests
-      WHERE title = ? AND year = ? AND media_type = ? AND status IN ('pending', 'downloading')
-    `).get(item.title, item.year, item.type === 'movie' ? 'movie' : 'tv');
+    const mediaType = item.type === 'movie' ? 'movie' : 'tv';
+    let tmdbId = null;
+
+    // Method 1: Try to get TMDB ID from Plex GUIDs (most accurate)
+    try {
+      const metadata = await plex.getItemMetadata(item.ratingKey);
+      if (metadata?.guids) {
+        tmdbId = extractTmdbIdFromGuids(metadata.guids);
+        if (tmdbId) {
+          console.log(`[PlexSync] Got TMDB ID ${tmdbId} from Plex GUIDs for "${item.title}"`);
+        }
+      }
+    } catch (e) {
+      console.warn(`[PlexSync] Could not fetch metadata for ${item.title}: ${e.message}`);
+    }
+
+    // Method 2: Try exact title match in requests/watchlist
+    if (!tmdbId) {
+      const exactMatch = db.prepare(`
+        SELECT tmdb_id FROM requests WHERE title = ? AND media_type = ?
+        UNION SELECT tmdb_id FROM watchlist WHERE title = ? AND media_type = ? AND is_active = 1
+        LIMIT 1
+      `).get(item.title, mediaType, item.title, mediaType);
+
+      if (exactMatch?.tmdb_id) {
+        tmdbId = exactMatch.tmdb_id;
+        console.log(`[PlexSync] Got TMDB ID ${tmdbId} from exact title match for "${item.title}"`);
+      }
+    }
+
+    // Method 3: Fuzzy title match (handles leetspeak like PLUR1BUS -> Pluribus)
+    if (!tmdbId) {
+      const normalizedPlexTitle = normalizeTitle(item.title);
+      const allTitles = db.prepare(`
+        SELECT tmdb_id, title FROM requests WHERE media_type = ?
+        UNION SELECT tmdb_id, title FROM watchlist WHERE media_type = ? AND is_active = 1
+      `).all(mediaType, mediaType);
+
+      for (const entry of allTitles) {
+        if (normalizeTitle(entry.title) === normalizedPlexTitle) {
+          tmdbId = entry.tmdb_id;
+          console.log(`[PlexSync] Got TMDB ID ${tmdbId} from fuzzy match: "${item.title}" ≈ "${entry.title}"`);
+          break;
+        }
+      }
+    }
+
+    // Check if this matches a pending request
+    let request = null;
+    if (tmdbId) {
+      // Match by TMDB ID (most accurate)
+      request = db.prepare(`
+        SELECT * FROM requests
+        WHERE tmdb_id = ? AND media_type = ? AND status IN ('pending', 'downloading')
+      `).get(tmdbId, mediaType);
+    }
+
+    if (!request) {
+      // Fallback: match by title/year
+      request = db.prepare(`
+        SELECT * FROM requests
+        WHERE title = ? AND year = ? AND media_type = ? AND status IN ('pending', 'downloading')
+      `).get(item.title, item.year, mediaType);
+    }
 
     if (request) {
       // Update request to available
@@ -488,6 +587,9 @@ async function processLibraryChanges(changes) {
         UPDATE requests SET status = 'available', available_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).run(request.id);
+
+      // Use request's TMDB ID if we didn't find one
+      if (!tmdbId) tmdbId = request.tmdb_id;
 
       // Track in daily stats
       const today = new Date().toISOString().split('T')[0];
@@ -498,22 +600,23 @@ async function processLibraryChanges(changes) {
       `).run(today);
 
       log('info', 'library-sync', `Content now available: ${item.title}`, {
-        tmdb_id: request.tmdb_id,
-        media_type: request.media_type,
+        tmdb_id: tmdbId,
+        media_type: mediaType,
         plex_rating_key: item.ratingKey
       });
     }
 
-    // Update lifecycle tracking
-    db.prepare(`
-      INSERT OR REPLACE INTO lifecycle (tmdb_id, media_type, plex_rating_key, status)
-      VALUES (
-        COALESCE((SELECT tmdb_id FROM requests WHERE title = ? AND year = ? LIMIT 1), 0),
-        ?,
-        ?,
-        'available'
-      )
-    `).run(item.title, item.year, item.type === 'movie' ? 'movie' : 'tv', item.ratingKey);
+    // Update lifecycle tracking with the TMDB ID we found
+    if (tmdbId) {
+      db.prepare(`
+        INSERT OR REPLACE INTO lifecycle (tmdb_id, media_type, plex_rating_key, status)
+        VALUES (?, ?, ?, 'available')
+      `).run(tmdbId, mediaType, item.ratingKey);
+
+      console.log(`[PlexSync] Created lifecycle entry: ratingKey=${item.ratingKey}, tmdb=${tmdbId}, title="${item.title}"`);
+    } else {
+      console.warn(`[PlexSync] Could not determine TMDB ID for "${item.title}" - lifecycle entry not created`);
+    }
   }
 
 
@@ -567,6 +670,115 @@ async function processLibraryChanges(changes) {
  * Main sync function - runs all sync operations
  * Called every 60 seconds by scheduler
  */
+/**
+ * Repair lifecycle entries for existing Plex library items
+ * This runs periodically to fix missing or broken (tmdb_id=0) entries
+ */
+async function repairLifecycleEntries() {
+  const now = Date.now();
+
+  // Only run every 5 minutes
+  if (syncState.lastLifecycleRepair && (now - syncState.lastLifecycleRepair) < LIFECYCLE_REPAIR_INTERVAL) {
+    return { skipped: true };
+  }
+
+  const plex = getPlexService();
+  if (!plex) return { skipped: true, reason: 'Plex not configured' };
+
+  console.log('[PlexSync] Running lifecycle repair...');
+  syncState.lastLifecycleRepair = now;
+
+  let repaired = 0;
+  let checked = 0;
+
+  try {
+    // Get all items from the library cache
+    for (const [ratingKey, item] of syncState.libraryCache) {
+      checked++;
+      const mediaType = item.type === 'movie' ? 'movie' : 'tv';
+
+      // Check if lifecycle entry exists and has valid tmdb_id
+      const existing = db.prepare(`
+        SELECT * FROM lifecycle WHERE plex_rating_key = ?
+      `).get(ratingKey);
+
+      // Skip if already has valid tmdb_id
+      if (existing?.tmdb_id > 0) continue;
+
+      // Try to find TMDB ID
+      let tmdbId = null;
+
+      // Method 1: Get from Plex GUIDs
+      try {
+        const metadata = await plex.getItemMetadata(ratingKey);
+        if (metadata?.guids) {
+          tmdbId = extractTmdbIdFromGuids(metadata.guids);
+          if (tmdbId) {
+            console.log(`[PlexSync:Repair] Got TMDB ID ${tmdbId} from GUIDs for "${item.title}"`);
+          }
+        }
+      } catch (e) {
+        // Ignore metadata fetch errors
+      }
+
+      // Method 2: Exact title match
+      if (!tmdbId) {
+        const exactMatch = db.prepare(`
+          SELECT tmdb_id FROM requests WHERE title = ? AND media_type = ?
+          UNION SELECT tmdb_id FROM watchlist WHERE title = ? AND media_type = ? AND is_active = 1
+          LIMIT 1
+        `).get(item.title, mediaType, item.title, mediaType);
+        if (exactMatch?.tmdb_id) {
+          tmdbId = exactMatch.tmdb_id;
+        }
+      }
+
+      // Method 3: Fuzzy title match
+      if (!tmdbId) {
+        const normalizedTitle = normalizeTitle(item.title);
+        const allTitles = db.prepare(`
+          SELECT tmdb_id, title FROM requests WHERE media_type = ?
+          UNION SELECT tmdb_id, title FROM watchlist WHERE media_type = ? AND is_active = 1
+        `).all(mediaType, mediaType);
+
+        for (const entry of allTitles) {
+          if (normalizeTitle(entry.title) === normalizedTitle) {
+            tmdbId = entry.tmdb_id;
+            console.log(`[PlexSync:Repair] Got TMDB ID ${tmdbId} from fuzzy match: "${item.title}" ≈ "${entry.title}"`);
+            break;
+          }
+        }
+      }
+
+      // Create or update lifecycle entry
+      if (tmdbId) {
+        if (existing) {
+          db.prepare('UPDATE lifecycle SET tmdb_id = ? WHERE id = ?').run(tmdbId, existing.id);
+        } else {
+          db.prepare(`
+            INSERT OR REPLACE INTO lifecycle (tmdb_id, media_type, plex_rating_key, status)
+            VALUES (?, ?, ?, 'available')
+          `).run(tmdbId, mediaType, ratingKey);
+        }
+        console.log(`[PlexSync:Repair] Fixed lifecycle for "${item.title}" (ratingKey=${ratingKey}, tmdb=${tmdbId})`);
+        repaired++;
+      }
+
+      // Rate limit API calls
+      await sleep(50);
+    }
+
+    if (repaired > 0) {
+      console.log(`[PlexSync:Repair] Complete: checked ${checked}, repaired ${repaired}`);
+    }
+
+    return { checked, repaired };
+  } catch (error) {
+    console.error('[PlexSync:Repair] Error:', error.message);
+    return { error: error.message };
+  }
+}
+
 async function runSync() {
   if (syncState.isRunning) {
     console.log('[PlexSync] Sync already running, skipping');
@@ -589,6 +801,7 @@ async function runSync() {
     library: null,
     watchHistory: null,
     users: null,
+    lifecycleRepair: null,
     duration: 0
   };
 
@@ -636,6 +849,14 @@ async function runSync() {
     } catch (e) {
       console.error('[PlexSync] User sync failed:', e.message);
       results.users = { error: e.message };
+    }
+
+    // Repair missing/broken lifecycle entries (runs every 5 minutes)
+    try {
+      results.lifecycleRepair = await repairLifecycleEntries();
+    } catch (e) {
+      console.error('[PlexSync] Lifecycle repair failed:', e.message);
+      results.lifecycleRepair = { error: e.message };
     }
 
     results.duration = Date.now() - startTime;
@@ -709,6 +930,7 @@ module.exports = {
   syncLibraryContent,
   syncWatchHistory,
   syncUsers,
+  repairLifecycleEntries,
   getStatus,
   loadSyncState
 };
