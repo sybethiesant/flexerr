@@ -102,23 +102,16 @@ class SmartEpisodeManager {
   }
 
   async initialize() {
-    // Use MediaServerFactory to get the primary media server (Plex or Jellyfin)
-    const mediaServer = MediaServerFactory.getPrimary();
-
-    if (mediaServer) {
-      this.mediaServer = mediaServer;
-      this.mediaServerType = mediaServer.type;
+    // IMPORTANT: Smart Episode Manager requires Plex-specific methods that aren't
+    // in the media server abstraction yet. Always use PlexService directly.
+    const plexService = PlexService.fromDb();
+    if (plexService) {
+      this.plex = plexService;
+      this.mediaServer = plexService;
+      this.mediaServerType = 'plex';
     } else {
-      // Fallback to legacy PlexService for backwards compatibility
-      const plexService = PlexService.fromDb();
-      if (plexService) {
-        this.mediaServer = plexService;
-        this.mediaServerType = 'plex';
-      }
+      console.error('[SmartEpisodeManager] Plex service not configured - required for smart cleanup');
     }
-
-    // Keep backwards compatibility - this.plex refers to the primary media server
-    this.plex = this.mediaServer;
 
     this.sonarr = SonarrService.fromDb();
     this.radarr = RadarrService.fromDb();
@@ -619,16 +612,23 @@ class SmartEpisodeManager {
 
       if (tmdbId) {
         // Get ALL users who have this show on their active watchlist
-        const allWatchlistUsers = db.prepare(`
-          SELECT w.*, u.username, u.id as user_id, u.plex_id,
-                 julianday('now') - julianday(w.added_at) as days_since_added
-          FROM watchlist w
-          JOIN users u ON w.user_id = u.id
-          WHERE w.tmdb_id = ?
-            AND w.media_type = 'tv'
-            AND w.is_active = 1
-          ORDER BY w.added_at DESC
-        `).all(tmdbId);
+        let allWatchlistUsers = [];
+        try {
+          allWatchlistUsers = db.prepare(`
+            SELECT w.*, u.username, u.id as user_id, u.plex_id,
+                   julianday('now') - julianday(w.added_at) as days_since_added
+            FROM watchlist w
+            JOIN users u ON w.user_id = u.id
+            WHERE w.tmdb_id = ?
+              AND w.media_type = 'tv'
+              AND w.is_active = 1
+            ORDER BY w.added_at DESC
+          `).all(tmdbId);
+        } catch (sqlErr) {
+          console.error('[SmartCleanup] SQL error getting watchlist users:', sqlErr.message);
+          // If SQL fails, protect the show (fail safe)
+          return true;
+        }
 
         for (const entry of allWatchlistUsers) {
           // Check velocity FIRST to see if user has started watching
@@ -725,6 +725,8 @@ class SmartEpisodeManager {
           WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
         `).get(pendingRequest.username, showRatingKey);
 
+        console.log(`[SmartCleanup DEBUG] First query for ${pendingRequest.username}: ratingKey=${showRatingKey}, found=${!!requesterVelocity}`);
+
         // If not found, try by title hash
         if (!requesterVelocity && pendingRequest.title) {
           let hash = 0;
@@ -733,10 +735,12 @@ class SmartEpisodeManager {
             hash = hash & hash;
           }
           const titleHash = Math.abs(hash).toString();
+          console.log(`[SmartCleanup DEBUG] Fallback query: title="${pendingRequest.title}", hash=${titleHash}`);
           requesterVelocity = db.prepare(`
             SELECT * FROM user_velocity
             WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
           `).get(pendingRequest.username, titleHash);
+          console.log(`[SmartCleanup DEBUG] Fallback result: found=${!!requesterVelocity}, position=${requesterVelocity?.current_position}`);
         }
 
         if (!requesterVelocity || !requesterVelocity.current_position || requesterVelocity.current_position === 0) {
@@ -750,6 +754,8 @@ class SmartEpisodeManager {
       return false;
     } catch (err) {
       console.error('[SmartCleanup] Error checking watchlist grace period:', err.message);
+      console.error('[SmartCleanup] Error stack:', err.stack);
+      console.error('[SmartCleanup] Show ratingKey:', showRatingKey, 'Title:', showInfo?.title);
       // On error, PROTECT the show (fail safe) - don't delete if we can't verify
       return true;
     }
@@ -763,6 +769,11 @@ class SmartEpisodeManager {
 
     const settings = this.getSettings();
     const analysis = await this.plex.analyzeShowWatchProgress(showRatingKey, 90);
+
+    // Debug: log episode count from Plex
+    if (analysis.episodes.length === 0) {
+      console.log(`[SmartCleanup] Plex returned 0 episodes for show ${showRatingKey} (${analysis.show?.title})`);
+    }
 
     const { episodes, userProgress } = analysis;
     let activeUsers = Object.values(userProgress).filter(u => u.isActive);
@@ -1687,10 +1698,17 @@ class SmartEpisodeManager {
 
       // Get all show libraries
       const libraries = await this.plex.getLibraries();
+      console.log(`[SmartCleanup] Found ${libraries.length} libraries: ${libraries.map(l => `${l.title}(${l.type})`).join(', ')}`);
       const showLibraries = libraries.filter(l => l.type === 'show');
+      console.log(`[SmartCleanup] Processing ${showLibraries.length} show libraries`);
+
+      if (showLibraries.length === 0) {
+        console.log('[SmartCleanup] WARNING: No show libraries found! Check Plex library types.');
+      }
 
       for (const library of showLibraries) {
         const shows = await this.plex.getLibraryContents(library.id);
+        console.log(`[SmartCleanup] Library "${library.title}" has ${shows.length} shows`);
 
         for (const show of shows) {
           try {
@@ -1702,9 +1720,21 @@ class SmartEpisodeManager {
 
             // Analyze the show
             const analysis = await this.analyzeShow(show.ratingKey);
-            if (!analysis || !analysis.episodes) continue;
+            if (!analysis || !analysis.episodes) {
+              console.log(`[SmartCleanup] Show "${show.title}" returned null analysis`);
+              continue;
+            }
 
-            results.episodesAnalyzed += analysis.episodes.length;
+            // Count episodes IMMEDIATELY after analysis
+            const episodeCount = analysis.episodes.length;
+            results.episodesAnalyzed += episodeCount;
+
+            if (episodeCount === 0) {
+              console.log(`[SmartCleanup] Show "${show.title}" has 0 episodes (empty array)`);
+              continue; // Skip shows with no episodes
+            }
+
+            console.log(`[SmartCleanup] Analyzing ${episodeCount} episodes for "${show.title}"`);
 
             // Find deletion candidates
             for (const episode of analysis.episodes) {
@@ -1747,12 +1777,14 @@ class SmartEpisodeManager {
                         deletedAt: new Date()
                       });
                     } else {
+                      console.error(`[SmartCleanup] Deletion failed for ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteResult.error);
                       results.errors.push({
                         ...candidate,
                         error: deleteResult.error
                       });
                     }
                   } catch (deleteErr) {
+                    console.error(`[SmartCleanup] Exception during deletion of ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteErr.message);
                     results.errors.push({
                       ...candidate,
                       error: deleteErr.message
@@ -1770,22 +1802,35 @@ class SmartEpisodeManager {
               }
             }
           } catch (showErr) {
+            console.error(`[SmartCleanup] Error analyzing show "${show.title}":`, showErr.message);
+            console.error(`[SmartCleanup] Stack trace:`, showErr.stack);
             results.errors.push({
               showTitle: show.title,
-              error: showErr.message
+              showRatingKey: show.ratingKey,
+              error: showErr.message,
+              stack: showErr.stack
             });
           }
         }
       }
 
+      const successfulShows = results.showsAnalyzed - results.errors.length;
       console.log(`[SmartCleanup] Analysis complete:`, {
         showsAnalyzed: results.showsAnalyzed,
+        successfulShows: successfulShows,
+        failedShows: results.errors.length,
         episodesAnalyzed: results.episodesAnalyzed,
         candidates: results.deletionCandidates.length,
         deleted: results.deleted.length,
-        protected: results.protected.length,
-        errors: results.errors.length
+        protected: results.protected.length
       });
+
+      if (results.errors.length > 0) {
+        console.log(`[SmartCleanup] Shows with errors:`);
+        results.errors.forEach(err => {
+          console.log(`  - ${err.showTitle} (${err.showRatingKey}): ${err.error}`);
+        });
+      }
 
       // Log the cleanup run
       log(dryRun ? 'info' : 'warn', 'smart-cleanup', `Velocity cleanup ${dryRun ? '(dry run)' : 'executed'}`, {
@@ -1875,13 +1920,15 @@ class SmartEpisodeManager {
               e.seasonNumber === seasonNumber && e.episodeNumber === episodeNumber
             );
 
-            if (sonarrEp && sonarrEp.episodeFileId) {
-              // Delete the episode file from Sonarr
-              await this.sonarr.deleteEpisodeFile(sonarrEp.episodeFileId);
-              results.sonarrDeleted = true;
-              console.log(`[SmartCleanup] Deleted from Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
-            } else if (sonarrEp) {
-              // Unmonitor the episode so it doesn't re-download
+            if (sonarrEp) {
+              if (sonarrEp.episodeFileId) {
+                // Delete the episode file from Sonarr
+                await this.sonarr.deleteEpisodeFile(sonarrEp.episodeFileId);
+                results.sonarrDeleted = true;
+                console.log(`[SmartCleanup] Deleted from Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
+              }
+
+              // ALWAYS unmonitor after deletion to prevent automatic re-download
               await this.sonarr.monitorEpisode(sonarrEp.id, false);
               console.log(`[SmartCleanup] Unmonitored in Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
             }

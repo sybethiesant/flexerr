@@ -163,7 +163,7 @@ The Smart Episode Manager intelligently manages TV show episodes based on each u
 
 ## Media Protection
 
-Protect specific movies or TV shows from any deletion - a priority override for all cleanup rules.
+Protect specific movies or TV shows from any deletion - a priority override for all cleanup rules. Protection now automatically ensures content is available!
 
 ### How to Protect Media
 
@@ -176,8 +176,22 @@ Protect specific movies or TV shows from any deletion - a priority override for 
 - **Priority 1 Override** - Protected items are NEVER deleted by any rule
 - **Bypasses Smart Cleanup** - Ignored by velocity-based episode management
 - **Bypasses Rules Engine** - Ignored by all cleanup rules
+- **Auto-Monitor** (NEW!) - Automatically sets to monitored in Sonarr/Radarr
+- **Auto-Search** (TV Shows) - Triggers search for ALL episodes to ensure availability
 - **Stats Visibility** - Protected items shown separately in cleanup stats
 - **Persistent** - Protection remains until manually toggled off
+
+### What Happens When You Protect Content
+
+**TV Shows:**
+1. Series set to `monitored: true` in Sonarr
+2. ALL episodes set to monitored (including previously unmonitored ones)
+3. Series search triggered to download any missing episodes
+4. Episodes will never be deleted by smart cleanup or rules
+
+**Movies:**
+1. Movie set to `monitored: true` in Radarr
+2. Will never be deleted by rules
 
 ## Rules Engine
 
@@ -236,7 +250,11 @@ Jellyfin uses username/password authentication:
 2. Login with your Jellyfin credentials
 3. The first user to sign in becomes the admin
 
-**Note:** Jellyfin uses Favorites as a watchlist equivalent since Jellyfin lacks native watchlist support.
+**Important Notes:**
+- Jellyfin uses Favorites as a watchlist equivalent since Jellyfin lacks native watchlist support
+- **Smart cleanup currently requires Plex** - Jellyfin velocity tracking is in development
+- Basic features work: browsing, requesting, watch history, collections
+- Advanced features (smart cleanup, velocity tracking) are Plex-only for now
 
 ### Sonarr / Radarr
 
@@ -288,9 +306,11 @@ The admin dashboard provides:
 
 ### Smart cleanup not running
 
+- **Smart cleanup requires Plex** - Jellyfin velocity tracking coming soon
 - Check Settings → Smart Episode Manager is enabled
 - Verify the cleanup schedule is set
 - Check Media Server Sync is enabled and running
+- Check logs for errors - admin dashboard shows detailed error reporting
 
 ### Content deleted too soon
 

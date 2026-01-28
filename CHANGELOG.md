@@ -2,6 +2,32 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.1-hotfix] - 2026-01-28
+
+### Fixed
+
+- **CRITICAL: Smart Cleanup Broken by Jellyfin Support**: Fixed fatal bug where the Jellyfin media server abstraction layer broke smart cleanup for ALL users. The abstraction layer was missing Plex-specific methods like `analyzeShowWatchProgress()` that smart cleanup depends on. Smart cleanup now correctly uses `PlexService` directly while Jellyfin support is improved.
+
+- **Sonarr Auto-Redownload Bug**: Fixed critical bug where deleted episodes were NOT being unmonitored in Sonarr, causing them to automatically re-download. Now ALL deleted episodes are properly unmonitored to prevent unwanted redownloads.
+
+- **Protection Now Auto-Monitors**: When a TV show or movie is protected, Flexerr now automatically:
+  - Sets the series/movie to `monitored: true` in Sonarr/Radarr
+  - Monitors ALL episodes in the series (for TV shows)
+  - Triggers a search to download any missing content
+  - Ensures protected content is always available
+
+### Improved
+
+- **Better Error Handling**: Smart cleanup now logs detailed error information with stack traces for debugging
+- **Episode Count Tracking**: Fixed episode counting to happen immediately after analysis, preventing 0 counts when errors occur later
+- **Error Reporting**: Analysis results now show successful vs failed shows separately
+
+### Technical Details
+
+- Smart Episode Manager temporarily forced to use legacy `PlexService` until Jellyfin velocity tracking is implemented
+- Added comprehensive Jellyfin implementation audit documenting ~45% feature parity
+- MediaServerFactory architecture confirmed ready for dual-server operation
+
 ## [1.1.0-beta] - 2026-01-28
 
 ### Added
