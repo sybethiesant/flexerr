@@ -921,6 +921,107 @@ function getStatus() {
   };
 }
 
+/**
+ * Calculate velocity from existing watch_history data
+ * This is useful when watch_history was populated but velocity wasn't calculated
+ * Groups by user and show title to calculate episodes per day
+ */
+async function calculateVelocityFromHistory() {
+  console.log('[PlexSync] Calculating velocity from existing watch history...');
+
+  try {
+    // Get all TV episode watches grouped by user and show title
+    const showWatches = db.prepare(`
+      SELECT
+        user_id,
+        title as show_title,
+        COUNT(*) as episode_count,
+        MIN(watched_at) as first_watch,
+        MAX(watched_at) as last_watch,
+        MAX(season_number) as current_season,
+        MAX(episode_number) as current_episode
+      FROM watch_history
+      WHERE media_type = 'tv'
+        AND season_number IS NOT NULL
+      GROUP BY user_id, title
+      HAVING COUNT(*) >= 2
+      ORDER BY user_id, title
+    `).all();
+
+    console.log(`[PlexSync] Found ${showWatches.length} user/show combinations with watch history`);
+
+    let updated = 0;
+
+    for (const show of showWatches) {
+      // Calculate days between first and last watch
+      const firstWatch = new Date(show.first_watch);
+      const lastWatch = new Date(show.last_watch);
+      const daysDiff = Math.max(1, (lastWatch - firstWatch) / (1000 * 60 * 60 * 24));
+
+      // Calculate velocity (episodes per day)
+      const velocity = show.episode_count / daysDiff;
+
+      // Calculate absolute position (season * 100 + episode as rough estimate)
+      const position = (show.current_season || 1) * 100 + (show.current_episode || 1);
+
+      // Try to find a plex rating key for this show from the library cache
+      // Use title matching as fallback
+      let showRatingKey = null;
+      for (const [ratingKey, item] of syncState.libraryCache) {
+        if (item.title && item.title.toLowerCase() === show.show_title.toLowerCase() && item.type === 'show') {
+          showRatingKey = ratingKey;
+          break;
+        }
+      }
+
+      // If no rating key found, use a hash of the title as identifier
+      if (!showRatingKey) {
+        // Create a simple numeric hash from the title
+        let hash = 0;
+        for (let i = 0; i < show.show_title.length; i++) {
+          hash = ((hash << 5) - hash) + show.show_title.charCodeAt(i);
+          hash = hash & hash; // Convert to 32bit integer
+        }
+        showRatingKey = Math.abs(hash).toString();
+      }
+
+      // Insert or update velocity
+      try {
+        db.prepare(`
+          INSERT INTO user_velocity (user_id, tmdb_id, current_position, current_season, current_episode, episodes_per_day, last_watched_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(user_id, tmdb_id) DO UPDATE SET
+            current_position = excluded.current_position,
+            current_season = excluded.current_season,
+            current_episode = excluded.current_episode,
+            episodes_per_day = excluded.episodes_per_day,
+            last_watched_at = excluded.last_watched_at,
+            updated_at = CURRENT_TIMESTAMP
+        `).run(
+          show.user_id,
+          showRatingKey,
+          position,
+          show.current_season || 1,
+          show.current_episode || 1,
+          velocity,
+          show.last_watch
+        );
+        updated++;
+
+        console.log(`[PlexSync] Velocity for user ${show.user_id} / "${show.show_title}": ${velocity.toFixed(2)} eps/day (${show.episode_count} eps over ${daysDiff.toFixed(1)} days)`);
+      } catch (e) {
+        console.error(`[PlexSync] Error updating velocity for ${show.show_title}:`, e.message);
+      }
+    }
+
+    console.log(`[PlexSync] Velocity calculation complete: ${updated} entries updated`);
+    return { success: true, updated };
+  } catch (error) {
+    console.error('[PlexSync] Error calculating velocity:', error.message);
+    return { error: error.message };
+  }
+}
+
 // Load state on module init
 loadSyncState();
 
@@ -931,6 +1032,7 @@ module.exports = {
   syncWatchHistory,
   syncUsers,
   repairLifecycleEntries,
+  calculateVelocityFromHistory,
   getStatus,
   loadSyncState
 };

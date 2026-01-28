@@ -253,6 +253,8 @@ export default function SettingsPage() {
   const [originalSettings, setOriginalSettings] = useState({});
   const [runningCleanup, setRunningCleanup] = useState(false);
   const [cleanupResult, setCleanupResult] = useState(null);
+  const [protectionStats, setProtectionStats] = useState(null);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -294,6 +296,19 @@ export default function SettingsPage() {
   const resetSettings = () => {
     setSettings(originalSettings);
     setHasChanges(false);
+  };
+
+  const fetchProtectionStats = async () => {
+    setLoadingStats(true);
+    try {
+      const res = await api.get('/cleanup/protection-stats');
+      setProtectionStats(res.data);
+    } catch (err) {
+      console.error('Failed to fetch protection stats:', err);
+      toast.error('Failed to load protection stats');
+    } finally {
+      setLoadingStats(false);
+    }
   };
 
   const runSmartCleanup = async (dryRun = true) => {
@@ -495,6 +510,62 @@ export default function SettingsPage() {
           </div>
         )}
 
+        <SettingRow label="Protection Stats" description="View why episodes are being protected">
+          <button
+            onClick={fetchProtectionStats}
+            disabled={loadingStats}
+            className="btn btn-secondary flex items-center gap-2 text-sm"
+          >
+            {loadingStats ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+            {protectionStats ? 'Refresh' : 'Load Stats'}
+          </button>
+        </SettingRow>
+
+        {protectionStats && (
+          <div className="bg-slate-700/50 rounded-lg p-4 text-sm space-y-4">
+            <div>
+              <div className="font-medium text-white mb-2">Protection Rules:</div>
+              <div className="grid grid-cols-1 gap-1 text-slate-300 text-xs">
+                <div>• {protectionStats.protectionReasons?.minDaysSinceWatch}</div>
+                <div>• {protectionStats.protectionReasons?.velocityBuffer}</div>
+                <div>• {protectionStats.protectionReasons?.maxAhead}</div>
+                <div>• {protectionStats.protectionReasons?.graceperiod}</div>
+              </div>
+            </div>
+
+            {protectionStats.velocities?.length > 0 && (
+              <div>
+                <div className="font-medium text-white mb-2">Active Viewers (Velocity Data):</div>
+                <div className="space-y-1">
+                  {protectionStats.velocities.map((v, i) => (
+                    <div key={i} className="flex justify-between text-xs bg-slate-600/50 rounded px-2 py-1">
+                      <span className="text-slate-300">{v.username}</span>
+                      <span className="text-primary-400">{v.position} @ {v.epsPerDay} eps/day</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {protectionStats.watchlistWithinGrace?.length > 0 && (
+              <div>
+                <div className="font-medium text-white mb-2">Watchlist Grace Period (Protected):</div>
+                <div className="space-y-1">
+                  {protectionStats.watchlistWithinGrace.slice(0, 10).map((w, i) => (
+                    <div key={i} className="flex justify-between text-xs bg-yellow-500/20 rounded px-2 py-1">
+                      <span className="text-slate-300">{w.title}</span>
+                      <span className="text-yellow-400">{w.username} - {w.daysAgo}d ago</span>
+                    </div>
+                  ))}
+                  {protectionStats.watchlistWithinGrace.length > 10 && (
+                    <div className="text-xs text-slate-500">...and {protectionStats.watchlistWithinGrace.length - 10} more</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <SettingRow label="Cleanup Schedule" description="When to run smart episode cleanup">
           <ScheduleInput
             value={getStr('velocity_cleanup_schedule', '0 3 * * *')}
@@ -635,6 +706,15 @@ export default function SettingsPage() {
             min={1}
             max={72}
             unit="hours"
+          />
+        </SettingRow>
+        <SettingRow label="Redownload Check Interval" description="How often to check if episodes need to be re-downloaded">
+          <NumberInput
+            value={getInt('smart_redownload_check_interval', 360)}
+            onChange={(v) => updateSetting('smart_redownload_check_interval', v)}
+            min={30}
+            max={1440}
+            unit="min"
           />
         </SettingRow>
 

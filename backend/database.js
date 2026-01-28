@@ -167,6 +167,38 @@ const initSchema = () => {
     );
 
     -- =====================
+    -- EPISODE STATS (Persistent episode analysis)
+    -- =====================
+    CREATE TABLE IF NOT EXISTS episode_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      show_rating_key TEXT NOT NULL,
+      show_title TEXT,
+      season_number INTEGER NOT NULL,
+      episode_number INTEGER NOT NULL,
+      episode_title TEXT,
+      velocity_position INTEGER,
+
+      -- Current analysis state
+      is_available INTEGER DEFAULT 1,
+      safe_to_delete INTEGER DEFAULT 0,
+      deletion_reason TEXT,
+
+      -- User tracking (JSON arrays)
+      users_beyond TEXT,
+      users_approaching TEXT,
+
+      -- Deletion tracking
+      deleted_at DATETIME,
+      deleted_by_cleanup INTEGER DEFAULT 0,
+
+      -- Timestamps
+      first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_analyzed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+      UNIQUE(show_rating_key, season_number, episode_number)
+    );
+
+    -- =====================
     -- CLEANUP RULES
     -- =====================
     CREATE TABLE IF NOT EXISTS rules (

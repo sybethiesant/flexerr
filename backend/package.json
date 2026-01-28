@@ -1,6 +1,6 @@
 {
   "name": "flexerr-backend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Flexerr - Media Request & Lifecycle Manager API",
   "main": "server.js",
   "scripts": {

@@ -2559,9 +2559,36 @@ app.get('/api/cleanup/show/:ratingKey', authenticate, requireAdmin, async (req, 
     // Also get synced velocity data
     const velocityData = smartManager.getAllVelocitiesForShow(ratingKey);
 
+    // Get historical episode stats (includes deleted episodes)
+    const historicalStats = smartManager.getEpisodeStats(ratingKey);
+
+    // Merge historical deleted episodes into the analysis
+    const deletedEpisodes = historicalStats
+      .filter(s => !s.is_available)
+      .map(s => ({
+        seasonNumber: s.season_number,
+        episodeNumber: s.episode_number,
+        title: s.episode_title,
+        velocityPosition: s.velocity_position,
+        safeToDelete: true,
+        deletionReason: s.deletion_reason || 'Previously deleted',
+        isDeleted: true,
+        deletedAt: s.deleted_at,
+        deletedByCleanup: s.deleted_by_cleanup === 1,
+        usersBeyond: JSON.parse(s.users_beyond || '[]'),
+        usersApproaching: JSON.parse(s.users_approaching || '[]'),
+        lastAnalyzedAt: s.last_analyzed_at
+      }));
+
     res.json({
       ...analysis,
-      syncedVelocityData: velocityData
+      syncedVelocityData: velocityData,
+      deletedEpisodes,
+      historicalStats: {
+        totalTracked: historicalStats.length,
+        currentlyAvailable: historicalStats.filter(s => s.is_available).length,
+        deleted: deletedEpisodes.length
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2583,6 +2610,113 @@ app.get('/api/cleanup/active-shows', authenticate, requireAdmin, async (req, res
       timestamp: new Date(),
       daysActive: parseInt(days),
       shows: activeShows
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get protection stats for troubleshooting
+app.get('/api/cleanup/protection-stats', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const SmartEpisodeManager = require('./services/smart-episodes');
+    const smartManager = new SmartEpisodeManager();
+    await smartManager.initialize();
+
+    const settings = smartManager.getSettings();
+
+    // Get velocity data
+    const velocities = db.prepare(`
+      SELECT v.*, u.username
+      FROM user_velocity v
+      JOIN users u ON v.user_id = u.id
+      ORDER BY v.last_watched_at DESC
+    `).all();
+
+    // Get watchlist stats
+    const watchlistStats = db.prepare(`
+      SELECT
+        w.tmdb_id,
+        w.title,
+        w.media_type,
+        u.username,
+        julianday('now') - julianday(w.added_at) as days_since_added,
+        w.added_at
+      FROM watchlist w
+      JOIN users u ON w.user_id = u.id
+      WHERE w.is_active = 1 AND w.media_type = 'tv'
+      ORDER BY w.added_at DESC
+    `).all();
+
+    // Get shows with protection reasons
+    const protectionSummary = [];
+    const activeShows = smartManager.getShowsWithActiveViewers(settings.activeViewerDays);
+
+    for (const show of activeShows.slice(0, 20)) {
+      const velocity = velocities.find(v => v.tmdb_id == show.show_rating_key);
+      const watchlist = watchlistStats.filter(w => {
+        // Try to match by title hash
+        let hash = 0;
+        for (let i = 0; i < (w.title || '').length; i++) {
+          hash = ((hash << 5) - hash) + w.title.charCodeAt(i);
+          hash = hash & hash;
+        }
+        return Math.abs(hash).toString() === show.show_rating_key;
+      });
+
+      protectionSummary.push({
+        ratingKey: show.show_rating_key,
+        activeViewers: show.active_viewers,
+        slowestPosition: show.slowest_position,
+        fastestPosition: show.fastest_position,
+        avgVelocity: show.avg_velocity,
+        lastActivity: show.last_activity,
+        velocityData: velocity ? {
+          username: velocity.username,
+          position: velocity.current_position,
+          season: velocity.current_season,
+          episode: velocity.current_episode,
+          epsPerDay: velocity.episodes_per_day
+        } : null,
+        watchlistUsers: watchlist.map(w => ({
+          username: w.username,
+          title: w.title,
+          daysAgo: Math.round(w.days_since_added)
+        }))
+      });
+    }
+
+    res.json({
+      timestamp: new Date(),
+      settings: {
+        enabled: settings.enabled,
+        minDaysSinceWatch: settings.minDaysSinceWatch,
+        velocityBufferDays: settings.velocityBufferDays,
+        protectEpisodesAhead: settings.protectEpisodesAhead,
+        maxEpisodesAhead: settings.maxEpisodesAhead,
+        trimAheadEnabled: settings.trimAheadEnabled,
+        watchlistGraceDays: settings.watchlistGraceDays,
+        activeViewerDays: settings.activeViewerDays
+      },
+      velocities: velocities.map(v => ({
+        username: v.username,
+        showId: v.tmdb_id,
+        position: `S${v.current_season}E${v.current_episode}`,
+        epsPerDay: v.episodes_per_day?.toFixed(2),
+        lastWatched: v.last_watched_at
+      })),
+      watchlistWithinGrace: watchlistStats.filter(w => w.days_since_added <= settings.watchlistGraceDays).map(w => ({
+        title: w.title,
+        username: w.username,
+        daysAgo: Math.round(w.days_since_added)
+      })),
+      protectionReasons: {
+        minDaysSinceWatch: `Episodes watched within last ${settings.minDaysSinceWatch} days are protected`,
+        velocityBuffer: `${settings.velocityBufferDays} days buffer for approaching users`,
+        maxAhead: `Max ${settings.maxEpisodesAhead} episodes ahead before trim`,
+        graceperiod: `${settings.watchlistGraceDays} days grace for new watchlist adds`
+      },
+      activeShows: protectionSummary
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

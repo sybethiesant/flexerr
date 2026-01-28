@@ -40,6 +40,34 @@ class SmartEpisodeManager {
     this.sonarr = null;
   }
 
+  /**
+   * Convert season/episode to velocity position format (season * 100 + episode)
+   * This is used for consistent position comparison with velocity data
+   */
+  toVelocityPosition(seasonNumber, episodeNumber) {
+    return (seasonNumber * 100) + episodeNumber;
+  }
+
+  /**
+   * Convert velocity position back to season/episode
+   */
+  fromVelocityPosition(position) {
+    const season = Math.floor(position / 100);
+    const episode = position % 100;
+    return { season, episode };
+  }
+
+  /**
+   * Compare if an episode is before, at, or after a velocity position
+   * Returns: -1 if episode is before position, 0 if at, 1 if after
+   */
+  compareEpisodeToPosition(seasonNumber, episodeNumber, velocityPosition) {
+    const episodePos = this.toVelocityPosition(seasonNumber, episodeNumber);
+    if (episodePos < velocityPosition) return -1;
+    if (episodePos > velocityPosition) return 1;
+    return 0;
+  }
+
   async initialize() {
     // Flexerr is Plex-only
     const plexService = PlexService.fromDb();
@@ -55,6 +83,108 @@ class SmartEpisodeManager {
     this.sonarr = SonarrService.fromDb();
     this.radarr = RadarrService.fromDb();
     return this;
+  }
+
+  // =========================================
+  // EPISODE STATS PERSISTENCE
+  // =========================================
+
+  /**
+   * Persist episode analysis to the database for historical tracking
+   * Called after analyzing a show to save stats even after episodes are deleted
+   */
+  persistEpisodeStats(showRatingKey, showTitle, episodes) {
+    const upsert = db.prepare(`
+      INSERT INTO episode_stats (
+        show_rating_key, show_title, season_number, episode_number, episode_title,
+        velocity_position, is_available, safe_to_delete, deletion_reason,
+        users_beyond, users_approaching, last_analyzed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(show_rating_key, season_number, episode_number) DO UPDATE SET
+        show_title = excluded.show_title,
+        episode_title = excluded.episode_title,
+        velocity_position = excluded.velocity_position,
+        is_available = excluded.is_available,
+        safe_to_delete = excluded.safe_to_delete,
+        deletion_reason = excluded.deletion_reason,
+        users_beyond = excluded.users_beyond,
+        users_approaching = excluded.users_approaching,
+        last_analyzed_at = CURRENT_TIMESTAMP
+    `);
+
+    const transaction = db.transaction((eps) => {
+      for (const ep of eps) {
+        const velocityPos = this.toVelocityPosition(ep.seasonNumber, ep.episodeNumber);
+        upsert.run(
+          showRatingKey,
+          showTitle,
+          ep.seasonNumber,
+          ep.episodeNumber,
+          ep.title || null,
+          velocityPos,
+          1, // is_available = true (it's in Plex)
+          ep.safeToDelete ? 1 : 0,
+          ep.deletionReason || null,
+          JSON.stringify(ep.usersBeyond || []),
+          JSON.stringify(ep.usersApproaching || [])
+        );
+      }
+    });
+
+    try {
+      transaction(episodes);
+    } catch (e) {
+      console.error('[SmartCleanup] Error persisting episode stats:', e.message);
+    }
+  }
+
+  /**
+   * Mark an episode as deleted in the stats table
+   */
+  markEpisodeDeleted(showRatingKey, seasonNumber, episodeNumber, byCleanup = true) {
+    try {
+      db.prepare(`
+        UPDATE episode_stats
+        SET is_available = 0,
+            deleted_at = CURRENT_TIMESTAMP,
+            deleted_by_cleanup = ?
+        WHERE show_rating_key = ? AND season_number = ? AND episode_number = ?
+      `).run(byCleanup ? 1 : 0, showRatingKey, seasonNumber, episodeNumber);
+    } catch (e) {
+      console.error('[SmartCleanup] Error marking episode deleted:', e.message);
+    }
+  }
+
+  /**
+   * Get all episode stats for a show (including deleted episodes)
+   */
+  getEpisodeStats(showRatingKey) {
+    try {
+      return db.prepare(`
+        SELECT * FROM episode_stats
+        WHERE show_rating_key = ?
+        ORDER BY season_number, episode_number
+      `).all(showRatingKey);
+    } catch (e) {
+      console.error('[SmartCleanup] Error getting episode stats:', e.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get episode stats by show title (for when rating key changes)
+   */
+  getEpisodeStatsByTitle(showTitle) {
+    try {
+      return db.prepare(`
+        SELECT * FROM episode_stats
+        WHERE show_title = ?
+        ORDER BY season_number, episode_number
+      `).all(showTitle);
+    } catch (e) {
+      console.error('[SmartCleanup] Error getting episode stats by title:', e.message);
+      return [];
+    }
   }
 
   // =========================================
@@ -148,16 +278,35 @@ class SmartEpisodeManager {
    * @param {string} showRatingKey - Plex rating key for the show
    * @returns {Array} Array of user buffer info
    */
-  getUserBufferZones(showRatingKey) {
+  getUserBufferZones(showRatingKey, showTitle = null) {
     try {
       // Get all velocity data for this show
-      const velocities = db.prepare(`
+      // First try by ratingKey
+      let velocities = db.prepare(`
         SELECT v.*, u.username, u.plex_id
         FROM user_velocity v
         JOIN users u ON v.user_id = u.id
         WHERE v.tmdb_id = ?
         ORDER BY v.last_watched_at DESC
       `).all(showRatingKey);
+
+      // If not found and we have a title, try by title hash
+      // (velocity calculated from watch_history uses title hash as tmdb_id)
+      if (velocities.length === 0 && showTitle) {
+        let hash = 0;
+        for (let i = 0; i < showTitle.length; i++) {
+          hash = ((hash << 5) - hash) + showTitle.charCodeAt(i);
+          hash = hash & hash;
+        }
+        const titleHash = Math.abs(hash).toString();
+        velocities = db.prepare(`
+          SELECT v.*, u.username, u.plex_id
+          FROM user_velocity v
+          JOIN users u ON v.user_id = u.id
+          WHERE v.tmdb_id = ?
+          ORDER BY v.last_watched_at DESC
+        `).all(titleHash);
+      }
 
       const settings = this.getSettings();
 
@@ -245,10 +394,11 @@ class SmartEpisodeManager {
    *
    * @param {string} showRatingKey - Plex rating key for the show
    * @param {number} episodePosition - Absolute position of the episode
+   * @param {string} showTitle - Show title for fallback velocity lookup
    * @returns {Object} { protected: boolean, reason: string, users: Array }
    */
-  isEpisodeInUserBuffer(showRatingKey, episodePosition) {
-    const bufferZones = this.getUserBufferZones(showRatingKey);
+  isEpisodeInUserBuffer(showRatingKey, episodePosition, showTitle = null) {
+    const bufferZones = this.getUserBufferZones(showRatingKey, showTitle);
 
     const protectingUsers = [];
 
@@ -441,30 +591,48 @@ class SmartEpisodeManager {
         `).all(tmdbId);
 
         for (const entry of allWatchlistUsers) {
-          // Check 1: Within standard grace period (recently added)
-          if (entry.days_since_added <= graceDays) {
-            console.log(`[SmartCleanup] Grace period ACTIVE for show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}) - user ${entry.username} added ${Math.round(entry.days_since_added)} days ago (within ${graceDays} day grace period)`);
-            return true;
-          }
-
-          // Check 2: User hasn't started watching yet (regardless of when added)
-          // A user "hasn't started" if they have no velocity data for this show
-          // Velocity data is created when a user watches episodes
-
-          // Check velocity table (uses ratingKey as identifier)
-          const userVelocity = db.prepare(`
+          // Check velocity FIRST to see if user has started watching
+          // Check velocity table - try by ratingKey first, then by title hash
+          let userVelocity = db.prepare(`
             SELECT * FROM user_velocity
             WHERE user_id = ? AND tmdb_id = ?
           `).get(entry.user_id, showRatingKey);
 
-          if (!userVelocity || !userVelocity.current_position || userVelocity.current_position === 0) {
-            // User has show watchlisted but hasn't started watching
-            console.log(`[SmartCleanup] PROTECTING show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}, title: "${entry.title}") - user ${entry.username} has it watchlisted but hasn't started watching yet (added ${Math.round(entry.days_since_added)} days ago)`);
-            return true;
+          // If not found, try by title hash (velocity calculated from watch_history uses title hash)
+          if (!userVelocity && showInfo?.title) {
+            // Generate same hash used in plex-sync.js calculateVelocityFromHistory
+            let hash = 0;
+            for (let i = 0; i < showInfo.title.length; i++) {
+              hash = ((hash << 5) - hash) + showInfo.title.charCodeAt(i);
+              hash = hash & hash;
+            }
+            const titleHash = Math.abs(hash).toString();
+            userVelocity = db.prepare(`
+              SELECT * FROM user_velocity
+              WHERE user_id = ? AND tmdb_id = ?
+            `).get(entry.user_id, titleHash);
           }
 
-          // If user has started watching (has velocity data), log but don't protect based on this entry
-          console.log(`[SmartCleanup] User ${entry.username} has velocity data for show (position: ${userVelocity.current_position}) - not protecting based on watchlist`);
+          const hasStartedWatching = userVelocity && userVelocity.current_position > 0;
+          const isWithinGracePeriod = entry.days_since_added <= graceDays;
+
+          if (hasStartedWatching) {
+            // User has started watching - velocity-based cleanup can proceed
+            // Log differently based on grace period
+            if (isWithinGracePeriod) {
+              console.log(`[SmartCleanup] User ${entry.username} is ACTIVELY WATCHING show (position: ${userVelocity.current_position}, ${userVelocity.episodes_per_day?.toFixed(2) || 0} eps/day) - added ${Math.round(entry.days_since_added)} days ago - velocity cleanup can proceed`);
+            } else {
+              console.log(`[SmartCleanup] User ${entry.username} has velocity data for show (position: ${userVelocity.current_position}) - not protecting based on watchlist`);
+            }
+          } else {
+            // User hasn't started watching yet - protect all episodes
+            if (isWithinGracePeriod) {
+              console.log(`[SmartCleanup] Grace period ACTIVE for show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}) - user ${entry.username} added ${Math.round(entry.days_since_added)} days ago and hasn't started watching yet`);
+            } else {
+              console.log(`[SmartCleanup] PROTECTING show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}, title: "${entry.title}") - user ${entry.username} has it watchlisted but hasn't started watching yet (added ${Math.round(entry.days_since_added)} days ago)`);
+            }
+            return true;
+          }
         }
 
         // If we reach here, all watchlisted users have started watching
@@ -475,48 +643,67 @@ class SmartEpisodeManager {
         console.log(`[SmartCleanup] No tmdb_id found for show (ratingKey: ${showRatingKey}, title: "${showInfo?.title || 'unknown'}") - cannot check watchlist`);
       }
 
-      // Method 3: Check requests table for any pending/processing requests by rating key OR title
+      // Method 3: Check requests table for any pending/processing requests by tmdb_id OR title
       // This catches shows that were just requested and may not be in lifecycle yet
       let pendingRequest = null;
 
-      // First try by plex_rating_key
-      pendingRequest = db.prepare(`
-        SELECT r.*, u.username,
-               julianday('now') - julianday(r.created_at) as days_since_requested
-        FROM requests r
-        JOIN users u ON r.user_id = u.id
-        WHERE r.plex_rating_key = ?
-          AND r.media_type = 'tv'
-          AND r.status IN ('pending', 'processing', 'available')
-        ORDER BY r.created_at DESC
-        LIMIT 1
-      `).get(showRatingKey);
+      // First try by tmdb_id if we have it
+      if (tmdbId) {
+        pendingRequest = db.prepare(`
+          SELECT r.*, u.username,
+                 julianday('now') - julianday(r.added_at) as days_since_requested
+          FROM requests r
+          JOIN users u ON r.user_id = u.id
+          WHERE r.tmdb_id = ?
+            AND r.media_type = 'tv'
+            AND r.status IN ('pending', 'processing', 'available')
+          ORDER BY r.added_at DESC
+          LIMIT 1
+        `).get(tmdbId);
+      }
 
-      // If not found by rating key, try by title
+      // If not found by tmdb_id, try by title
       if (!pendingRequest && showInfo?.title) {
         pendingRequest = db.prepare(`
           SELECT r.*, u.username,
-                 julianday('now') - julianday(r.created_at) as days_since_requested
+                 julianday('now') - julianday(r.added_at) as days_since_requested
           FROM requests r
           JOIN users u ON r.user_id = u.id
           WHERE lower(r.title) = lower(?)
             AND r.media_type = 'tv'
             AND r.status IN ('pending', 'processing', 'available')
-          ORDER BY r.created_at DESC
+          ORDER BY r.added_at DESC
           LIMIT 1
         `).get(showInfo.title);
       }
 
       if (pendingRequest) {
         // Check if the requester has started watching
-        const requesterVelocity = db.prepare(`
+        // Try by ratingKey first, then by title hash
+        let requesterVelocity = db.prepare(`
           SELECT * FROM user_velocity
           WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
         `).get(pendingRequest.username, showRatingKey);
 
+        // If not found, try by title hash
+        if (!requesterVelocity && pendingRequest.title) {
+          let hash = 0;
+          for (let i = 0; i < pendingRequest.title.length; i++) {
+            hash = ((hash << 5) - hash) + pendingRequest.title.charCodeAt(i);
+            hash = hash & hash;
+          }
+          const titleHash = Math.abs(hash).toString();
+          requesterVelocity = db.prepare(`
+            SELECT * FROM user_velocity
+            WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
+          `).get(pendingRequest.username, titleHash);
+        }
+
         if (!requesterVelocity || !requesterVelocity.current_position || requesterVelocity.current_position === 0) {
           console.log(`[SmartCleanup] PROTECTING show via request (ratingKey: ${showRatingKey}, title: "${pendingRequest.title}") - requested by ${pendingRequest.username} who hasn't started watching`);
           return true;
+        } else {
+          console.log(`[SmartCleanup] Requester ${pendingRequest.username} is ACTIVELY WATCHING "${pendingRequest.title}" (position: ${requesterVelocity.current_position}) - velocity cleanup can proceed`);
         }
       }
 
@@ -538,7 +725,37 @@ class SmartEpisodeManager {
     const analysis = await this.plex.analyzeShowWatchProgress(showRatingKey, 90);
 
     const { episodes, userProgress } = analysis;
-    const activeUsers = Object.values(userProgress).filter(u => u.isActive);
+    let activeUsers = Object.values(userProgress).filter(u => u.isActive);
+
+    // IMPORTANT: Augment with our velocity table data which is more accurate
+    // Plex's viewCount-based positions are often wrong (returns 0 for everything)
+    const velocityUsers = this.getUserBufferZones(showRatingKey, analysis.show?.title);
+
+    if (velocityUsers.length > 0) {
+      // Merge velocity data with Plex users or add new users
+      for (const velUser of velocityUsers) {
+        if (!velUser.isActive) continue;
+
+        const existingUser = activeUsers.find(u => u.accountId === velUser.plexId);
+        if (existingUser) {
+          // Update with velocity data if it shows further progress
+          if (velUser.currentPosition > existingUser.currentPosition) {
+            existingUser.currentPosition = velUser.currentPosition;
+            existingUser.velocity = velUser.velocity || existingUser.velocity;
+            existingUser.lastWatchedDate = velUser.lastWatched ? new Date(velUser.lastWatched) : existingUser.lastWatchedDate;
+          }
+        } else {
+          // Add user from velocity data
+          activeUsers.push({
+            accountId: velUser.plexId,
+            currentPosition: velUser.currentPosition,
+            velocity: velUser.velocity || 1,
+            lastWatchedDate: velUser.lastWatched ? new Date(velUser.lastWatched) : new Date(),
+            isActive: true
+          });
+        }
+      }
+    }
 
     // For each episode, calculate:
     // - Who has watched it
@@ -552,7 +769,9 @@ class SmartEpisodeManager {
       : 0;
 
     // Check if show has any watch activity (at least one episode watched by anyone)
-    const hasWatchActivity = episodes.some(ep => ep.viewCount > 0);
+    // Use velocity data as additional signal since Plex viewCount is often unreliable
+    const hasWatchActivity = episodes.some(ep => ep.viewCount > 0) ||
+                             velocityUsers.some(v => v.isActive && v.currentPosition > 0);
 
     // Check if show is on any user's watchlist within grace period
     // This protects shows that users added but haven't started watching yet
@@ -567,8 +786,13 @@ class SmartEpisodeManager {
       let needsRedownload = false;
       let redownloadBy = null;
 
+      // Convert episode to velocity position format (season * 100 + episode)
+      // This matches how velocity data stores positions
+      const episodeVelocityPos = this.toVelocityPosition(ep.seasonNumber, ep.episodeNumber);
+
       for (const user of activeUsers) {
-        if (ep.absoluteIndex <= user.currentPosition) {
+        // Compare using velocity position format (season * 100 + episode)
+        if (episodeVelocityPos <= user.currentPosition) {
           // User has passed this episode
           usersBeyond.push({
             accountId: user.accountId,
@@ -576,7 +800,7 @@ class SmartEpisodeManager {
           });
         } else {
           // User is approaching this episode
-          const daysUntilNeeded = this.calculateDaysUntilNeeded(user, ep);
+          const daysUntilNeeded = this.calculateDaysUntilNeeded(user, ep, episodeVelocityPos);
           usersApproaching.push({
             accountId: user.accountId,
             currentPosition: user.currentPosition,
@@ -601,7 +825,8 @@ class SmartEpisodeManager {
         hasWatchActivity,
         activeUserCount: activeUsers.length,
         watchlistGraceActive,
-        showRatingKey  // Pass for per-user buffer zone checking
+        showRatingKey,  // Pass for per-user buffer zone checking
+        showTitle: analysis.show?.title  // Pass for velocity lookup by title hash
       });
 
       return {
@@ -615,6 +840,9 @@ class SmartEpisodeManager {
         activeViewerCount: activeUsers.length
       };
     });
+
+    // Persist episode stats to database for historical tracking
+    this.persistEpisodeStats(showRatingKey, analysis.show?.title, episodeAnalysis);
 
     return {
       show: analysis.show,
@@ -638,25 +866,32 @@ class SmartEpisodeManager {
 
   /**
    * Calculate how many days until a user needs a specific episode
+   * Uses velocity position format (season * 100 + episode) for accurate calculation
    */
-  calculateDaysUntilNeeded(user, episode) {
+  calculateDaysUntilNeeded(user, episode, episodeVelocityPos = null) {
+    // Calculate velocity position if not provided
+    const epPos = episodeVelocityPos || this.toVelocityPosition(episode.seasonNumber, episode.episodeNumber);
+
     if (!user.velocity || user.velocity === 0) {
       // No velocity data, assume 1 episode per day
-      return episode.absoluteIndex - user.currentPosition;
+      // This is a rough estimate since positions are in velocity format
+      return Math.max(0, epPos - user.currentPosition);
     }
-    const episodesAway = episode.absoluteIndex - user.currentPosition;
+    const episodesAway = epPos - user.currentPosition;
     return Math.max(0, episodesAway / user.velocity);
   }
 
   /**
    * Calculate how many days since a user passed an episode
+   * Uses velocity position format for consistency
    */
   calculateDaysSincePassed(user, episode) {
     // Rough estimate based on velocity
     if (!user.velocity || user.velocity === 0 || !user.lastWatchedDate) {
       return null;
     }
-    const episodesPassed = user.currentPosition - episode.absoluteIndex;
+    const epPos = this.toVelocityPosition(episode.seasonNumber, episode.episodeNumber);
+    const episodesPassed = user.currentPosition - epPos;
     const daysSinceLastWatch = (Date.now() - user.lastWatchedDate.getTime()) / (1000 * 60 * 60 * 24);
     return daysSinceLastWatch + (episodesPassed / user.velocity);
   }
@@ -686,21 +921,28 @@ class SmartEpisodeManager {
       hasWatchActivity = false,
       activeUserCount = 0,
       watchlistGraceActive = false,
-      showRatingKey = null
+      showRatingKey = null,
+      showTitle = null
     } = context;
 
-    // CHECK 1: Watchlist grace period - protect shows where users haven't started watching
-    if (watchlistGraceActive && episode.viewCount === 0) {
+    // Calculate velocity position for this episode (season * 100 + episode)
+    // This must match how velocity data stores positions
+    const episodeVelocityPos = this.toVelocityPosition(episode.seasonNumber, episode.episodeNumber);
+
+    // CHECK 1: Watchlist grace period - protect ALL episodes for shows where users haven't started
+    // This protects against re-downloads being deleted due to Plex preserving view history
+    if (watchlistGraceActive) {
       return {
         safe: false,
-        reason: 'Watchlist user hasn\'t started watching yet - protecting all episodes'
+        reason: 'Show is on watchlist within grace period or user hasn\'t started - protecting all episodes'
       };
     }
 
     // CHECK 2: Per-user buffer zones - protect episodes in any user's approach buffer
     // This is the key feature for independent buffer tracking per user
-    if (showRatingKey && episode.absoluteIndex) {
-      const bufferCheck = this.isEpisodeInUserBuffer(showRatingKey, episode.absoluteIndex);
+    // NOTE: Uses velocity position format (season * 100 + episode) for consistent comparison
+    if (showRatingKey && episode.seasonNumber && episode.episodeNumber) {
+      const bufferCheck = this.isEpisodeInUserBuffer(showRatingKey, episodeVelocityPos, showTitle);
       if (bufferCheck.protected) {
         return {
           safe: false,
@@ -709,23 +951,36 @@ class SmartEpisodeManager {
       }
     }
 
-    // CHECK 3: Users approaching within velocity buffer days
-    if (usersApproaching.length > 0) {
-      const soonestArrival = Math.min(...usersApproaching.map(u => u.daysUntilNeeded));
-      if (soonestArrival <= settings.velocityBufferDays) {
-        return {
-          safe: false,
-          reason: `User approaching in ${Math.round(soonestArrival)} days`
-        };
-      }
-    }
+    // CHECK 3 & 4: Per-user buffer protection
+    // IMPORTANT: Only protect episodes that are within a user's BUFFER ZONE
+    // Episodes beyond ALL users' buffers can be deleted - this enables the "gap" deletion
+    if (usersApproaching.length > 0 && episode.seasonNumber && episode.episodeNumber) {
+      // Filter to only users whose buffer actually covers this episode
+      // Using velocity position format for consistent comparison
+      const usersNeedingThisEpisode = usersApproaching.filter(u => {
+        const userBufferLimit = u.currentPosition + (settings.velocityBufferDays * (u.velocity || 1));
+        return episodeVelocityPos <= userBufferLimit;
+      });
 
-    // CHECK 4: Require all active users to have watched (strict mode)
-    if (settings.requireAllUsersWatched && usersApproaching.length > 0) {
-      return {
-        safe: false,
-        reason: `${usersApproaching.length} user(s) haven't watched yet`
-      };
+      // CHECK 3: Users approaching within their buffer
+      if (usersNeedingThisEpisode.length > 0) {
+        const soonestArrival = Math.min(...usersNeedingThisEpisode.map(u => u.daysUntilNeeded));
+        if (soonestArrival <= settings.velocityBufferDays) {
+          return {
+            safe: false,
+            reason: `User approaching in ${Math.round(soonestArrival)} days (episode in their buffer)`
+          };
+        }
+
+        // CHECK 4: Require all users with this episode in buffer to have watched
+        if (settings.requireAllUsersWatched) {
+          return {
+            safe: false,
+            reason: `${usersNeedingThisEpisode.length} user(s) have this episode in their buffer`
+          };
+        }
+      }
+      // If no users have this episode in their buffer, it's in the "gap" and can be deleted
     }
 
     // CHECK 5: Minimum days since last watch
@@ -749,7 +1004,7 @@ class SmartEpisodeManager {
     // 6. Episode is beyond ALL users' velocity-based buffer zones
     if (settings.trimAheadEnabled && hasWatchActivity && activeUserCount > 0 && episode.viewCount === 0 && !watchlistGraceActive) {
       // Get all user buffer zones for this show
-      const bufferZones = showRatingKey ? this.getUserBufferZones(showRatingKey) : [];
+      const bufferZones = showRatingKey ? this.getUserBufferZones(showRatingKey, showTitle) : [];
 
       // Calculate the maximum buffer needed (furthest protect position across all users)
       let maxProtectPosition = fastestViewerPosition + settings.protectEpisodesAhead;
@@ -776,30 +1031,38 @@ class SmartEpisodeManager {
       }
 
       // If episode is beyond the maximum protect position, it's safe to delete
-      if (episode.absoluteIndex > maxProtectPosition) {
-        const episodesAhead = episode.absoluteIndex - fastestViewerPosition;
+      // Using velocity position format for consistent comparison
+      if (episodeVelocityPos > maxProtectPosition) {
+        const episodesAhead = episodeVelocityPos - fastestViewerPosition;
         return {
           safe: true,
-          reason: `Too far ahead: ${episodesAhead} eps beyond fastest viewer (buffer: ${bufferReason})`
+          reason: `Too far ahead: S${episode.seasonNumber}E${episode.episodeNumber} beyond fastest viewer (buffer: ${bufferReason})`
         };
       }
     }
 
     // CHECK 7: Never watched episodes (not far-ahead trim candidates) are not safe
-    if (episode.viewCount === 0) {
+    // IMPORTANT: Use velocity data to determine if watched, not just Plex's viewCount
+    // (Plex viewCount is often 0 because it requires user-specific tokens to access)
+    const wasWatchedByVelocity = usersBeyond.length > 0; // Users have passed this episode
+
+    if (episode.viewCount === 0 && !wasWatchedByVelocity) {
       return {
         safe: false,
-        reason: 'Never watched'
+        reason: 'Never watched (no users have passed this episode)'
       };
     }
 
-    // Episode has been watched, is past all users' buffer zones, and meets time requirements
+    // Episode has been watched (either by Plex viewCount or velocity position)
+    // It's past all users' buffer zones and meets time requirements
     const daysSinceWatch = episode.lastViewedAt
       ? Math.round((Date.now() - episode.lastViewedAt.getTime()) / (1000 * 60 * 60 * 24))
       : 'unknown';
     return {
       safe: true,
-      reason: `Watched ${daysSinceWatch} days ago, all active users past`
+      reason: wasWatchedByVelocity
+        ? `${usersBeyond.length} user(s) have passed this episode - safe to delete`
+        : `Watched ${daysSinceWatch} days ago, all active users past`
     };
   }
 
@@ -1421,7 +1684,8 @@ class SmartEpisodeManager {
                       episode.ratingKey,
                       show.title,
                       episode.seasonNumber,
-                      episode.episodeNumber
+                      episode.episodeNumber,
+                      show.ratingKey
                     );
 
                     if (deleteResult.success) {
@@ -1522,7 +1786,7 @@ class SmartEpisodeManager {
   /**
    * Delete an episode from Plex and Sonarr
    */
-  async deleteEpisode(ratingKey, showTitle, seasonNumber, episodeNumber) {
+  async deleteEpisode(ratingKey, showTitle, seasonNumber, episodeNumber, showRatingKey = null) {
     if (!this.plex) await this.initialize();
 
     const results = {
@@ -1585,6 +1849,11 @@ class SmartEpisodeManager {
           plex_deleted: results.plexDeleted,
           sonarr_deleted: results.sonarrDeleted
         });
+
+        // Mark episode as deleted in stats table for historical tracking
+        if (showRatingKey) {
+          this.markEpisodeDeleted(showRatingKey, seasonNumber, episodeNumber, true);
+        }
       }
 
     } catch (err) {
