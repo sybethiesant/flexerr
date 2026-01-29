@@ -1028,7 +1028,7 @@ export default function MediaDetails() {
     fetchDetails();
   }, [mediaType, id]);
 
-  // Fetch Plex watch URL - always check if content is available in Plex
+  // Fetch media server watch URL - check if content is available in media server
   useEffect(() => {
     if (details) {
       fetchPlexWatchUrl();
@@ -1041,7 +1041,7 @@ export default function MediaDetails() {
       const res = await api.get(`/plex/watch-url/${id}/${mediaType}`);
       setPlexWatchUrl(res.data.watchUrl);
     } catch (e) {
-      // Not available in Plex
+      // Not available in media server
       setPlexWatchUrl(null);
     }
   };
@@ -1326,16 +1326,16 @@ export default function MediaDetails() {
               </button>
             )}
 
-            {/* Watch on Plex */}
+            {/* Watch on Media Server */}
             {plexWatchUrl && (
               <a
                 href={plexWatchUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="btn bg-orange-500 hover:bg-orange-600 text-white flex items-center space-x-2"
+                className="btn bg-emerald-600 hover:bg-emerald-700 text-white flex items-center space-x-2"
               >
                 <MonitorPlay className="h-5 w-5" />
-                <span>Watch on Plex</span>
+                <span>Watch</span>
               </a>
             )}
 

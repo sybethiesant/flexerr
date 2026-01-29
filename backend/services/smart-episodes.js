@@ -259,41 +259,106 @@ class SmartEpisodeManager {
 
   /**
    * Get all active velocities (users who watched in last N days)
+   * Supports both Plex and Jellyfin velocity data
    */
   getActiveVelocities(daysActive = 30) {
     try {
-      return db.prepare(`
-        SELECT v.*, u.username, u.plex_id
+      // Get Plex velocities from user_velocity table
+      const plexVelocities = db.prepare(`
+        SELECT v.*, u.username, u.plex_id, 'plex' as source
         FROM user_velocity v
         JOIN users u ON v.user_id = u.id
         WHERE v.last_watched_at >= datetime('now', '-' || ? || ' days')
         ORDER BY v.last_watched_at DESC
       `).all(daysActive);
+
+      // Get Jellyfin velocities from jellyfin_user_velocity table
+      const jellyfinVelocities = db.prepare(`
+        SELECT
+          jv.user_id,
+          jv.series_id as tmdb_id,
+          jv.series_name as title_hash,
+          jv.velocity as episodes_per_day,
+          (jv.current_season * 100 + jv.current_episode) as current_position,
+          jv.last_watch as last_watched_at,
+          u.username,
+          u.plex_id,
+          'jellyfin' as source
+        FROM jellyfin_user_velocity jv
+        JOIN users u ON jv.user_id = u.plex_id
+        WHERE jv.last_watch >= datetime('now', '-' || ? || ' days')
+        ORDER BY jv.last_watch DESC
+      `).all(daysActive);
+
+      // Combine and return both
+      return [...plexVelocities, ...jellyfinVelocities];
     } catch (e) {
+      console.error('[SmartCleanup] Error getting active velocities:', e.message);
       return [];
     }
   }
 
   /**
    * Get shows with active viewers (for prioritized cleanup)
+   * Combines data from both Plex and Jellyfin sources
    */
   getShowsWithActiveViewers(daysActive = 30) {
     try {
-      return db.prepare(`
+      // Get Plex shows
+      const plexShows = db.prepare(`
         SELECT
           v.tmdb_id as show_rating_key,
           COUNT(DISTINCT v.user_id) as active_viewers,
           MIN(v.current_position) as slowest_position,
           MAX(v.current_position) as fastest_position,
           AVG(v.episodes_per_day) as avg_velocity,
-          MAX(v.last_watched_at) as last_activity
+          MAX(v.last_watched_at) as last_activity,
+          'plex' as source
         FROM user_velocity v
         WHERE v.last_watched_at >= datetime('now', '-' || ? || ' days')
         GROUP BY v.tmdb_id
         HAVING COUNT(DISTINCT v.user_id) > 0
-        ORDER BY last_activity DESC
       `).all(daysActive);
+
+      // Get Jellyfin shows
+      const jellyfinShows = db.prepare(`
+        SELECT
+          jv.series_id as show_rating_key,
+          COUNT(DISTINCT jv.user_id) as active_viewers,
+          MIN(jv.current_season * 100 + jv.current_episode) as slowest_position,
+          MAX(jv.current_season * 100 + jv.current_episode) as fastest_position,
+          AVG(jv.velocity) as avg_velocity,
+          MAX(jv.last_watch) as last_activity,
+          'jellyfin' as source
+        FROM jellyfin_user_velocity jv
+        WHERE jv.last_watch >= datetime('now', '-' || ? || ' days')
+        GROUP BY jv.series_id
+        HAVING COUNT(DISTINCT jv.user_id) > 0
+      `).all(daysActive);
+
+      // Combine results - merge shows that appear in both sources
+      const showsMap = new Map();
+
+      for (const show of [...plexShows, ...jellyfinShows]) {
+        if (showsMap.has(show.show_rating_key)) {
+          const existing = showsMap.get(show.show_rating_key);
+          // Merge data - take most conservative approach
+          existing.active_viewers += show.active_viewers;
+          existing.slowest_position = Math.min(existing.slowest_position, show.slowest_position);
+          existing.fastest_position = Math.max(existing.fastest_position, show.fastest_position);
+          existing.avg_velocity = (existing.avg_velocity + show.avg_velocity) / 2;
+          existing.last_activity = existing.last_activity > show.last_activity ? existing.last_activity : show.last_activity;
+          existing.source = 'both';
+        } else {
+          showsMap.set(show.show_rating_key, show);
+        }
+      }
+
+      // Convert back to array and sort by last activity
+      return Array.from(showsMap.values())
+        .sort((a, b) => new Date(b.last_activity) - new Date(a.last_activity));
     } catch (e) {
+      console.error('[SmartCleanup] Error getting shows with active viewers:', e.message);
       return [];
     }
   }
@@ -1278,6 +1343,9 @@ class SmartEpisodeManager {
    * Run proactive re-download check and trigger downloads
    */
   async runProactiveRedownloads() {
+    if (!this.plex) await this.initialize();
+    if (!this.plex) return { error: 'Plex not configured - smart cleanup requires Plex' };
+
     const settings = this.getSettings();
     if (!settings.redownloadEnabled) {
       return { enabled: false };
@@ -1454,6 +1522,9 @@ class SmartEpisodeManager {
    * Handle velocity change - trigger appropriate action
    */
   async handleVelocityChanges() {
+    if (!this.plex) await this.initialize();
+    if (!this.plex) return { error: 'Plex not configured - smart cleanup requires Plex' };
+
     const settings = this.getSettings();
     const { enabled, changes, action } = await this.checkVelocityChanges();
 
@@ -1568,6 +1639,9 @@ class SmartEpisodeManager {
    * Run emergency redownloads
    */
   async runEmergencyRedownloads() {
+    if (!this.plex) await this.initialize();
+    if (!this.plex) return { error: 'Plex not configured - smart cleanup requires Plex' };
+
     const { enabled, emergencies } = await this.checkEmergencyRedownloads();
 
     if (!enabled || emergencies.length === 0) {
@@ -1968,6 +2042,9 @@ class SmartEpisodeManager {
    * Quick check without actually deleting anything
    */
   async getCleanupSummary() {
+    if (!this.plex) await this.initialize();
+    if (!this.plex) return { error: 'Plex not configured - smart cleanup requires Plex' };
+
     const settings = this.getSettings();
 
     // Use synced data for quick summary

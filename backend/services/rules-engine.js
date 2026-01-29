@@ -1,5 +1,6 @@
 const { db, getSetting, log } = require('../database');
 const PlexService = require('./plex');
+const { MediaServerFactory } = require('./media-server');
 const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
 const SmartEpisodeManager = require('./smart-episodes');
@@ -14,23 +15,32 @@ class RulesEngine {
   }
 
   async initialize() {
-    // Flexerr is Plex-only
-    const plexService = PlexService.fromDb();
+    // Use MediaServerFactory to support both Plex and Jellyfin
+    const mediaServer = MediaServerFactory.getPrimary();
 
-    if (plexService) {
-      this.mediaServer = plexService;
-      this.mediaServerType = 'plex';
+    if (mediaServer) {
+      this.mediaServer = mediaServer;
+      this.mediaServerType = mediaServer.type;
+    } else {
+      // Fallback to legacy PlexService for backward compatibility
+      const plexService = PlexService.fromDb();
+      if (plexService) {
+        this.mediaServer = plexService;
+        this.mediaServerType = 'plex';
+      }
     }
 
-    // Keep backwards compatibility
+    // Keep backwards compatibility for code that references this.plex
     this.plex = this.mediaServer;
 
     this.sonarr = SonarrService.getAllFromDb();
     this.radarr = RadarrService.getAllFromDb();
 
     if (!this.mediaServer) {
-      throw new Error('No media server configured (Plex)');
+      throw new Error('No media server configured. Please configure Plex or Jellyfin.');
     }
+
+    console.log(`[RulesEngine] Initialized with ${this.mediaServerType} media server`);
   }
 
   // Get all active rules sorted by priority
@@ -479,7 +489,12 @@ class RulesEngine {
       }
 
       // Get activity for shows
-      if (targetType === 'shows' && this.plex) {
+      // Note: targetType can be 'shows'/'show' (Plex uses 'show', rules use 'shows')
+      const isShow = targetType === 'shows' || targetType === 'show';
+      const isMovie = targetType === 'movies' || targetType === 'movie';
+      const isTVContent = isShow || targetType === 'seasons' || targetType === 'episodes' || targetType === 'episode';
+
+      if (isShow && this.plex) {
         const activity = await this.plex.getShowActivity(item.ratingKey);
         context.lastActivity = activity.lastActivity;
         context.watchedEpisodes = activity.totalWatched;
@@ -489,7 +504,7 @@ class RulesEngine {
       // Get Sonarr/Radarr info if not already set above
       // For episodes, use parent show's guids to find the series
       const itemGuids = item.guids || [];
-      if (!context.arrItem && (targetType === 'shows' || targetType === 'seasons' || targetType === 'episodes')) {
+      if (!context.arrItem && isTVContent) {
         for (const sonarr of this.sonarr) {
           const series = await sonarr.findSeriesByGuid(itemGuids);
           if (series) {
@@ -499,7 +514,7 @@ class RulesEngine {
             break;
           }
         }
-      } else if (!context.arrItem && targetType === 'movies') {
+      } else if (!context.arrItem && isMovie) {
         for (const radarr of this.radarr) {
           const movie = await radarr.findMovieByGuid(itemGuids);
           if (movie) {
@@ -514,9 +529,9 @@ class RulesEngine {
 
       // Get file size if we have arr info but didn't get size yet
       if (context.arrItem && !context.fileSize) {
-        if (context.arrService && targetType === 'movies') {
+        if (context.arrService && isMovie && typeof context.arrService.getMovieSize === 'function') {
           context.fileSize = await context.arrService.getMovieSize(context.arrItem.id);
-        } else if (context.arrService) {
+        } else if (context.arrService && typeof context.arrService.getSeriesSize === 'function') {
           context.fileSize = await context.arrService.getSeriesSize(context.arrItem.id);
         }
       }

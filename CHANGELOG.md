@@ -2,6 +2,44 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.2] - 2026-01-29
+
+### Fixed
+
+- **Jellyfin Webhook Validation**: Added comprehensive input validation to Jellyfin webhook endpoint to prevent crashes from malformed events
+- **Jellyfin Completion Detection**: Fixed critical bug where missing PlaybackInfo data defaulted to 0% instead of null, breaking episode completion detection
+- **Jellyfin Watch Duration**: Implemented proper watch duration calculation by matching start/stop events and computing actual viewing time
+- **Jellyfin Velocity Calculation**: Made 30-day velocity window configurable via `jellyfin_velocity_window_days` setting (default: 30)
+- **Jellyfin Multi-Server Support**: Fixed seriesInfo query to properly filter by media_server_id for dual Plex+Jellyfin installations
+- **Code Cleanup**: Removed 3 backup files (242 KB), eliminated duplicate axios requires, created shared httpsAgent for consistency
+
+### Added
+
+- **Jellyfin Configuration UI**: Added new settings section in Admin UI for Jellyfin-specific configuration
+  - `jellyfin_completion_percentage` - Configurable episode completion threshold (50-100%, default 90%)
+  - `jellyfin_velocity_window_days` - Configurable velocity calculation window (7-90 days, default 30)
+- **Database Helper Function**: Added `getJellyfinRecentStartEvent()` for accurate watch duration tracking
+- **Improved Error Handling**: All Jellyfin webhook database operations now wrapped in try-catch with detailed logging
+
+### Changed
+
+- **Jellyfin Webhook Endpoint**: Complete rewrite with proper validation, error handling, and configurable settings
+- **Performance**: Moved repeated require() calls to top of server.js for better performance
+- **Consistency**: Standardized httpsAgent usage across image proxy endpoints
+
+### Technical Details
+
+- All changes are backward compatible - existing Plex installations unaffected
+- Jellyfin webhook now properly handles all event types with graceful fallbacks
+- Watch duration calculation includes sanity checks (positive values, < 24 hours)
+- Multi-server support ensures proper data isolation between Plex and Jellyfin instances
+
+### Documentation
+
+- Created comprehensive audit logs: `AUDIT_LOG_2026-01-29.md`, `AUDIT_SUMMARY_2026-01-29.md`
+- Updated `CLAUDE.md` with correct database query patterns and troubleshooting guides
+- Fixed 18 out of 27 issues identified in code audit (67% completion rate)
+
 ## [1.1.1-hotfix] - 2026-01-28
 
 ### Fixed
