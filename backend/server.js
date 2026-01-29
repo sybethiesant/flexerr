@@ -7,7 +7,22 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { db, getSetting, setSetting, getAllSettings, log, getUserById } = require('./database');
+const https = require('https');
+
+// Shared HTTPS agent for image proxy endpoints (allows self-signed certs)
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+const {
+  db,
+  getSetting,
+  setSetting,
+  getAllSettings,
+  log,
+  getUserById,
+  getMediaServerByType,
+  recordJellyfinWatchEvent,
+  calculateJellyfinVelocity,
+  getJellyfinRecentStartEvent
+} = require('./database');
 const AuthService = require('./services/auth');
 const TMDBService = require('./services/tmdb');
 const WatchlistTriggerService = require('./services/watchlist-trigger');
@@ -209,13 +224,34 @@ app.post('/api/setup/complete', async (req, res) => {
         ...AuthService.generateTokensForMediaServer(user, 'jellyfin')
       };
     } else {
+      // Create media server entry for Plex
+      const { createMediaServer } = require('./database');
+
+      const mediaServer = createMediaServer({
+        type: 'plex',
+        name: 'Plex',
+        url: plexUrl,
+        api_key: plexToken,
+        is_primary: true
+      });
+
       // Create first user via Plex auth (existing flow)
       authResult = await AuthService.setupFirstUser(plexToken, plexUrl);
       if (!authResult.success) {
         return res.status(400).json({ error: authResult.error });
       }
 
-      // Add Plex service
+      // Update the user to link to media server
+      const { getUserById } = require('./database');
+      const user = getUserById(authResult.user.id);
+      if (user && !user.media_server_id) {
+        db.prepare(`
+          UPDATE users SET media_server_type = 'plex', media_server_id = ?
+          WHERE id = ?
+        `).run(mediaServer.id, user.id);
+      }
+
+      // Add Plex service (legacy compatibility)
       db.prepare(`
         INSERT INTO services (type, name, url, api_key, is_default, is_active)
         VALUES ('plex', 'Plex', ?, ?, 1, 1)
@@ -308,6 +344,212 @@ app.post('/api/jellyfin/auth', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[Jellyfin] Auth failed:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Jellyfin Webhook - receives playback events for velocity tracking
+app.post('/api/jellyfin/webhook', async (req, res) => {
+  try {
+    const event = req.body;
+
+    // Early validation of event structure
+    if (!event || typeof event !== 'object') {
+      console.warn('[Jellyfin Webhook] Invalid event: not an object');
+      return res.status(400).json({ success: false, error: 'Invalid event data' });
+    }
+
+    const eventType = event.Event || event.NotificationType;
+    console.log(`[Jellyfin Webhook] Received event: ${eventType}`);
+
+    // Validate event has required fields
+    if (!eventType) {
+      console.warn('[Jellyfin Webhook] Missing event type');
+      return res.status(400).json({ success: false, error: 'Missing event type' });
+    }
+
+    if (!event.Item || event.Item.Type !== 'Episode') {
+      // Silently ignore non-episode events (movies, music, etc.)
+      return res.json({ success: true, message: 'Event ignored (not an episode)' });
+    }
+
+    // Validate required user fields
+    const userId = event.User?.Id || event.UserId;
+    const userName = event.User?.Name || event.Username;
+
+    if (!userId) {
+      console.error('[Jellyfin Webhook] Missing user ID in event');
+      return res.status(400).json({ success: false, error: 'Missing user ID' });
+    }
+
+    // Validate required item fields
+    const item = event.Item;
+    if (!item.SeriesId || !item.Id) {
+      console.error('[Jellyfin Webhook] Missing required item fields (SeriesId or Id)');
+      return res.status(400).json({ success: false, error: 'Missing required item fields' });
+    }
+
+    const seriesId = item.SeriesId;
+    const seriesName = item.SeriesName || 'Unknown Series';
+    const seasonNumber = item.ParentIndexNumber || item.SeasonNumber || 0;
+    const episodeNumber = item.IndexNumber || item.EpisodeNumber || 0;
+    const episodeId = item.Id;
+    const episodeName = item.Name || `Episode ${episodeNumber}`;
+
+    // Get Jellyfin server configuration
+    const jellyfinServer = getMediaServerByType('jellyfin');
+    if (!jellyfinServer) {
+      console.warn('[Jellyfin Webhook] No Jellyfin server configured - event will be recorded without media_server_id');
+    }
+    const mediaServerId = jellyfinServer?.id || null;
+
+    // Get configurable settings with fallbacks
+    const completionThreshold = parseFloat(getSetting('jellyfin_completion_percentage') || '90');
+
+    // Handle different event types
+    if (eventType === 'playback.start' || eventType === 'PlaybackStart') {
+      // User started watching
+      try {
+        recordJellyfinWatchEvent({
+          user_id: userId,
+          user_name: userName,
+          series_id: seriesId,
+          series_name: seriesName,
+          season_number: seasonNumber,
+          episode_number: episodeNumber,
+          episode_id: episodeId,
+          episode_name: episodeName,
+          event_type: 'start',
+          session_id: event.PlaybackInfo?.PlaySessionId || event.SessionId || null,
+          device_name: event.PlaybackInfo?.DeviceName || event.DeviceName || null,
+          media_server_id: mediaServerId,
+          timestamp: event.Timestamp || new Date().toISOString()
+        });
+
+        console.log(`[Jellyfin] User ${userName} started watching ${seriesName} S${seasonNumber}E${episodeNumber}`);
+      } catch (dbError) {
+        console.error('[Jellyfin Webhook] Database error recording start event:', dbError);
+        throw dbError;
+      }
+    }
+    else if (eventType === 'playback.stop' || eventType === 'PlaybackStop') {
+      // User stopped watching
+      // CRITICAL FIX: Don't default to 0 if PlaybackInfo is missing - use null instead
+      const positionTicks = event.PlaybackInfo?.PositionTicks || null;
+      const playedPercentage = event.PlaybackInfo?.PlayedPercentage !== undefined
+        ? event.PlaybackInfo.PlayedPercentage
+        : null;
+
+      // Calculate watch duration by finding matching start event
+      let watchDuration = null;
+      const sessionId = event.PlaybackInfo?.PlaySessionId || event.SessionId || null;
+
+      try {
+        const startEvent = getJellyfinRecentStartEvent(userId, episodeId, sessionId, mediaServerId);
+        if (startEvent && startEvent.timestamp) {
+          const startTime = new Date(startEvent.timestamp);
+          const stopTime = new Date(event.Timestamp || new Date().toISOString());
+          const durationMs = stopTime - startTime;
+
+          // Only set duration if it's positive and reasonable (< 24 hours)
+          if (durationMs > 0 && durationMs < 24 * 60 * 60 * 1000) {
+            watchDuration = Math.floor(durationMs / 1000); // Convert to seconds
+          }
+        }
+      } catch (durationError) {
+        console.warn('[Jellyfin Webhook] Could not calculate watch duration:', durationError.message);
+        // Continue without duration - not critical
+      }
+
+      // Determine if episode was completed
+      // If no PlaybackInfo, we can't determine completion - mark as "stop" only
+      const completed = playedPercentage !== null && playedPercentage > completionThreshold;
+
+      try {
+        recordJellyfinWatchEvent({
+          user_id: userId,
+          user_name: userName,
+          series_id: seriesId,
+          series_name: seriesName,
+          season_number: seasonNumber,
+          episode_number: episodeNumber,
+          episode_id: episodeId,
+          episode_name: episodeName,
+          event_type: completed ? 'complete' : 'stop',
+          position_ticks: positionTicks,
+          played_percentage: playedPercentage,
+          watch_duration_seconds: watchDuration,
+          session_id: event.PlaybackInfo?.PlaySessionId || event.SessionId || null,
+          device_name: event.PlaybackInfo?.DeviceName || event.DeviceName || null,
+          media_server_id: mediaServerId,
+          timestamp: event.Timestamp || new Date().toISOString()
+        });
+
+        if (completed) {
+          // Recalculate velocity when episode completed
+          try {
+            const velocityData = calculateJellyfinVelocity(userId, seriesId, mediaServerId);
+
+            if (velocityData) {
+              console.log(`[Jellyfin] User ${userName} completed ${seriesName} S${seasonNumber}E${episodeNumber}`);
+              console.log(`[Jellyfin] Updated velocity: ${velocityData.velocity.toFixed(2)} episodes/day (${velocityData.episodesWatched} episodes watched)`);
+            } else {
+              console.log(`[Jellyfin] User ${userName} completed ${seriesName} S${seasonNumber}E${episodeNumber} (not enough data for velocity yet)`);
+            }
+          } catch (velocityError) {
+            console.error('[Jellyfin Webhook] Error calculating velocity:', velocityError);
+            // Don't fail the webhook - velocity calculation is not critical
+          }
+        } else if (playedPercentage !== null) {
+          console.log(`[Jellyfin] User ${userName} stopped watching ${seriesName} S${seasonNumber}E${episodeNumber} at ${playedPercentage.toFixed(1)}%`);
+        } else {
+          console.log(`[Jellyfin] User ${userName} stopped watching ${seriesName} S${seasonNumber}E${episodeNumber} (no progress data)`);
+        }
+      } catch (dbError) {
+        console.error('[Jellyfin Webhook] Database error recording stop event:', dbError);
+        throw dbError;
+      }
+    }
+    else if (eventType === 'item.markplayed' || eventType === 'ItemMarkPlayed') {
+      // Episode manually marked as played
+      try {
+        recordJellyfinWatchEvent({
+          user_id: userId,
+          user_name: userName,
+          series_id: seriesId,
+          series_name: seriesName,
+          season_number: seasonNumber,
+          episode_number: episodeNumber,
+          episode_id: episodeId,
+          episode_name: episodeName,
+          event_type: 'complete',
+          played_percentage: 100,
+          media_server_id: mediaServerId,
+          timestamp: event.Timestamp || new Date().toISOString()
+        });
+
+        // Recalculate velocity
+        try {
+          const velocityData = calculateJellyfinVelocity(userId, seriesId, mediaServerId);
+
+          if (velocityData) {
+            console.log(`[Jellyfin] User ${userName} marked ${seriesName} S${seasonNumber}E${episodeNumber} as played`);
+            console.log(`[Jellyfin] Updated velocity: ${velocityData.velocity.toFixed(2)} episodes/day`);
+          }
+        } catch (velocityError) {
+          console.error('[Jellyfin Webhook] Error calculating velocity:', velocityError);
+          // Don't fail the webhook
+        }
+      } catch (dbError) {
+        console.error('[Jellyfin Webhook] Database error recording markplayed event:', dbError);
+        throw dbError;
+      }
+    }
+
+    res.json({ success: true, event: eventType });
+  } catch (error) {
+    console.error('[Jellyfin Webhook] Error processing event:', error);
+    console.error('[Jellyfin Webhook] Event data:', JSON.stringify(req.body, null, 2));
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1252,9 +1494,6 @@ app.get('/api/plex/image/queue/:id', async (req, res) => {
       return res.status(404).send('Image not found');
     }
 
-    const axios = require('axios');
-    const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
-
     // Try the stored URL first
     if (item.poster_url) {
       try {
@@ -1305,11 +1544,10 @@ app.get('/api/plex/image/:ratingKey', async (req, res) => {
     const { ratingKey } = req.params;
     const imageUrl = `${plex.url}/library/metadata/${ratingKey}/thumb?X-Plex-Token=${plex.token}`;
 
-    const axios = require('axios');
     const response = await axios.get(imageUrl, {
       responseType: 'arraybuffer',
       timeout: 10000,
-      httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false })
+      httpsAgent
     });
 
     res.set('Content-Type', response.headers['content-type'] || 'image/jpeg');

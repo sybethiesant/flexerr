@@ -907,6 +907,145 @@ const runMigrations = () => {
     // Migrate existing plex_id to media_item_key
     db.exec('UPDATE exclusions SET media_item_key = plex_id WHERE media_item_key IS NULL');
   }
+
+  // Add media_server_id to rules for multi-server support
+  const rulesColumns = db.prepare("PRAGMA table_info(rules)").all();
+  const rulesColumnNames = rulesColumns.map(c => c.name);
+
+  if (!rulesColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to rules table');
+    db.exec('ALTER TABLE rules ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_rules_media_server ON rules(media_server_id)');
+  }
+
+  // Add media_server_id to requests for multi-server support
+  const requestsColumns = db.prepare("PRAGMA table_info(requests)").all();
+  const requestsColumnNames = requestsColumns.map(c => c.name);
+
+  if (!requestsColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to requests table');
+    db.exec('ALTER TABLE requests ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  // Add media_server_id to watchlist for multi-server support
+  if (!watchlistColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to watchlist table');
+    db.exec('ALTER TABLE watchlist ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  // Add media_server_id to repair_requests for multi-server support
+  if (!repairColumnNames.includes('media_server_id')) {
+    console.log('[Database] Adding media_server_id column to repair_requests table');
+    db.exec('ALTER TABLE repair_requests ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
+  }
+
+  // Create composite indexes for multi-server uniqueness enforcement
+  // These improve performance and help application-level enforcement
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_users_server_id ON users(plex_id, media_server_id);
+    CREATE INDEX IF NOT EXISTS idx_requests_server ON requests(tmdb_id, media_type, media_server_id);
+    CREATE INDEX IF NOT EXISTS idx_watchlist_server ON watchlist(user_id, tmdb_id, media_type, media_server_id);
+    CREATE INDEX IF NOT EXISTS idx_lifecycle_server ON lifecycle(tmdb_id, media_type, media_server_id);
+    CREATE INDEX IF NOT EXISTS idx_watch_history_server ON watch_history(media_server_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_episode_stats_server ON episode_stats(media_server_id, media_item_key);
+  `);
+
+  console.log('[Database] Multi-server indexes created successfully');
+
+  // =====================================================
+  // Migration: Create media_server entries for existing Plex installations
+  // =====================================================
+  const existingPlexServer = db.prepare("SELECT * FROM media_servers WHERE type = 'plex'").get();
+
+  if (!existingPlexServer) {
+    // Check if there's a Plex service in the legacy services table
+    const plexService = db.prepare("SELECT * FROM services WHERE type = 'plex' AND is_active = 1").get();
+
+    if (plexService) {
+      console.log('[Database] Migrating legacy Plex service to media_servers table');
+
+      // Create media_server entry for Plex
+      const result = db.prepare(`
+        INSERT INTO media_servers (type, name, url, api_key, is_primary, is_active, created_at)
+        VALUES ('plex', 'Plex', ?, ?, 1, 1, CURRENT_TIMESTAMP)
+      `).run(plexService.url, plexService.api_key);
+
+      const plexServerId = result.lastInsertRowid;
+      console.log(`[Database] Created media_server entry for Plex (ID: ${plexServerId})`);
+
+      // Update all existing users without media_server_id to link to Plex server
+      const updatedUsers = db.prepare(`
+        UPDATE users
+        SET media_server_type = 'plex', media_server_id = ?
+        WHERE media_server_id IS NULL AND plex_id IS NOT NULL
+      `).run(plexServerId);
+
+      console.log(`[Database] Updated ${updatedUsers.changes} existing Plex users with media_server_id`);
+    }
+  }
+
+  // =====================================================
+  // Jellyfin Webhook Tracking Tables
+  // =====================================================
+
+  // Create jellyfin_watch_events table for tracking all playback events
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS jellyfin_watch_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      user_name TEXT,
+      series_id TEXT NOT NULL,
+      series_name TEXT,
+      season_number INTEGER,
+      episode_number INTEGER,
+      episode_id TEXT,
+      episode_name TEXT,
+      event_type TEXT NOT NULL, -- 'start', 'stop', 'complete', 'pause', 'unpause'
+      position_ticks BIGINT,
+      played_percentage REAL,
+      watch_duration_seconds INTEGER,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      session_id TEXT,
+      device_name TEXT,
+      media_server_id INTEGER REFERENCES media_servers(id)
+    )
+  `);
+
+  // Create jellyfin_user_velocity table for calculated velocity data
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS jellyfin_user_velocity (
+      user_id TEXT NOT NULL,
+      series_id TEXT NOT NULL,
+      series_name TEXT,
+      velocity REAL, -- Episodes per day
+      current_season INTEGER,
+      current_episode INTEGER,
+      episodes_watched INTEGER,
+      first_watch DATETIME,
+      last_watch DATETIME,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      media_server_id INTEGER REFERENCES media_servers(id),
+      PRIMARY KEY (user_id, series_id, media_server_id)
+    )
+  `);
+
+  // Create indexes for Jellyfin watch events
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jellyfin_watch_velocity
+      ON jellyfin_watch_events(user_id, series_id, timestamp);
+
+    CREATE INDEX IF NOT EXISTS idx_jellyfin_watch_complete
+      ON jellyfin_watch_events(user_id, series_id, event_type, timestamp)
+      WHERE event_type = 'complete';
+
+    CREATE INDEX IF NOT EXISTS idx_jellyfin_watch_series
+      ON jellyfin_watch_events(series_id, event_type, timestamp);
+
+    CREATE INDEX IF NOT EXISTS idx_jellyfin_velocity_lookup
+      ON jellyfin_user_velocity(user_id, series_id);
+  `);
+
+  console.log('[Database] Jellyfin webhook tracking tables initialized');
 };
 
 // Helper functions
@@ -951,12 +1090,27 @@ const getUserById = (id) => {
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
 };
 
-const getUserByPlexId = (plexId) => {
+const getUserByPlexId = (plexId, mediaServerId = null) => {
+  // Support both legacy (no media_server_id) and new multi-server lookups
+  if (mediaServerId) {
+    return db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_id = ?').get(plexId, mediaServerId);
+  }
+  // Legacy: try exact match first, then fall back to any user with this plex_id
+  const withServerId = db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_id IS NOT NULL').get(plexId);
+  if (withServerId) return withServerId;
+  // Backward compatibility: return user without media_server_id set
   return db.prepare('SELECT * FROM users WHERE plex_id = ?').get(plexId);
 };
 
 const createOrUpdateUser = (userData) => {
-  const existing = getUserByPlexId(userData.plex_id);
+  // Get Plex media server ID if not provided
+  let mediaServerId = userData.media_server_id;
+  if (!mediaServerId) {
+    const plexServer = db.prepare("SELECT id FROM media_servers WHERE type = 'plex' AND is_active = 1").get();
+    mediaServerId = plexServer?.id || null;
+  }
+
+  const existing = getUserByPlexId(userData.plex_id, mediaServerId);
 
   if (existing) {
     db.prepare(`
@@ -966,21 +1120,25 @@ const createOrUpdateUser = (userData) => {
         email = ?,
         thumb = ?,
         is_owner = ?,
+        media_server_type = ?,
+        media_server_id = ?,
         last_login = CURRENT_TIMESTAMP
-      WHERE plex_id = ?
+      WHERE id = ?
     `).run(
       userData.plex_token,
       userData.username,
       userData.email || existing.email,
       userData.thumb || existing.thumb,
       userData.is_owner ? 1 : existing.is_owner,
-      userData.plex_id
+      'plex',
+      mediaServerId,
+      existing.id
     );
-    return getUserByPlexId(userData.plex_id);
+    return getUserById(existing.id);
   } else {
     const result = db.prepare(`
-      INSERT INTO users (plex_id, plex_token, username, email, thumb, is_admin, is_owner, last_login)
-      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO users (plex_id, plex_token, username, email, thumb, is_admin, is_owner, media_server_type, media_server_id, last_login)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(
       userData.plex_id,
       userData.plex_token,
@@ -988,7 +1146,9 @@ const createOrUpdateUser = (userData) => {
       userData.email || null,
       userData.thumb || null,
       userData.is_admin ? 1 : 0,
-      userData.is_owner ? 1 : 0
+      userData.is_owner ? 1 : 0,
+      'plex',
+      mediaServerId
     );
     return getUserById(result.lastInsertRowid);
   }
@@ -1112,13 +1272,31 @@ const deleteMediaServer = (id) => {
 };
 
 // Generic user function that works with any media server type
-const getUserByMediaServerId = (serverUserId, mediaServerType = 'plex') => {
-  return db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_type = ?').get(serverUserId, mediaServerType);
+const getUserByMediaServerId = (serverUserId, mediaServerIdOrType) => {
+  // Support both media_server_id (number) and media_server_type (string) for flexibility
+  if (typeof mediaServerIdOrType === 'number') {
+    return db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_id = ?').get(serverUserId, mediaServerIdOrType);
+  } else {
+    // Legacy: lookup by type
+    const mediaServerType = mediaServerIdOrType || 'plex';
+    return db.prepare('SELECT * FROM users WHERE plex_id = ? AND media_server_type = ?').get(serverUserId, mediaServerType);
+  }
 };
 
 const createOrUpdateUserGeneric = (userData) => {
   const mediaServerType = userData.media_server_type || 'plex';
-  const existing = getUserByMediaServerId(userData.server_user_id, mediaServerType);
+
+  // Determine media_server_id
+  let mediaServerId = userData.media_server_id;
+  if (!mediaServerId && mediaServerType) {
+    const server = db.prepare("SELECT id FROM media_servers WHERE type = ? AND is_active = 1").get(mediaServerType);
+    mediaServerId = server?.id || null;
+  }
+
+  // Look up existing user by media_server_id if available, otherwise by type
+  const existing = mediaServerId
+    ? getUserByMediaServerId(userData.server_user_id, mediaServerId)
+    : getUserByMediaServerId(userData.server_user_id, mediaServerType);
 
   if (existing) {
     db.prepare(`
@@ -1139,7 +1317,7 @@ const createOrUpdateUserGeneric = (userData) => {
       userData.thumb || existing.thumb,
       userData.is_owner ? 1 : existing.is_owner,
       mediaServerType,
-      userData.media_server_id || existing.media_server_id,
+      mediaServerId,
       existing.id
     );
     return getUserById(existing.id);
@@ -1156,10 +1334,226 @@ const createOrUpdateUserGeneric = (userData) => {
       userData.is_admin ? 1 : 0,
       userData.is_owner ? 1 : 0,
       mediaServerType,
-      userData.media_server_id || null
+      mediaServerId
     );
     return getUserById(result.lastInsertRowid);
   }
+};
+
+// =====================================================
+// Jellyfin Webhook Tracking Functions
+// =====================================================
+
+/**
+ * Record a Jellyfin watch event from webhook
+ */
+const recordJellyfinWatchEvent = (eventData) => {
+  return db.prepare(`
+    INSERT INTO jellyfin_watch_events
+    (user_id, user_name, series_id, series_name, season_number, episode_number,
+     episode_id, episode_name, event_type, position_ticks, played_percentage,
+     watch_duration_seconds, timestamp, session_id, device_name, media_server_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    eventData.user_id,
+    eventData.user_name,
+    eventData.series_id,
+    eventData.series_name,
+    eventData.season_number,
+    eventData.episode_number,
+    eventData.episode_id,
+    eventData.episode_name,
+    eventData.event_type,
+    eventData.position_ticks || null,
+    eventData.played_percentage || null,
+    eventData.watch_duration_seconds || null,
+    eventData.timestamp || new Date().toISOString(),
+    eventData.session_id || null,
+    eventData.device_name || null,
+    eventData.media_server_id || null
+  );
+};
+
+/**
+ * Calculate velocity for a user/show based on completed watch events
+ */
+const calculateJellyfinVelocity = (userId, seriesId, mediaServerId = null) => {
+  // Get configurable velocity window (default 30 days)
+  const velocityWindowDays = parseInt(getSetting('jellyfin_velocity_window_days') || '30');
+
+  // Get completed episodes in configured time window
+  const query = mediaServerId
+    ? `SELECT season_number, episode_number, timestamp
+       FROM jellyfin_watch_events
+       WHERE user_id = ? AND series_id = ? AND media_server_id = ?
+         AND event_type = 'complete'
+         AND timestamp > datetime('now', '-${velocityWindowDays} days')
+       ORDER BY timestamp ASC`
+    : `SELECT season_number, episode_number, timestamp
+       FROM jellyfin_watch_events
+       WHERE user_id = ? AND series_id = ?
+         AND event_type = 'complete'
+         AND timestamp > datetime('now', '-${velocityWindowDays} days')
+       ORDER BY timestamp ASC`;
+
+  const params = mediaServerId ? [userId, seriesId, mediaServerId] : [userId, seriesId];
+  const completedEpisodes = db.prepare(query).all(...params);
+
+  if (completedEpisodes.length < 2) {
+    return null; // Not enough data
+  }
+
+  // Calculate time span and velocity
+  const firstWatch = new Date(completedEpisodes[0].timestamp);
+  const lastWatch = new Date(completedEpisodes[completedEpisodes.length - 1].timestamp);
+  const daysDiff = (lastWatch - firstWatch) / (1000 * 60 * 60 * 24);
+
+  let velocity;
+  if (daysDiff === 0) {
+    // Watched multiple episodes same day (binging)
+    velocity = completedEpisodes.length;
+  } else {
+    velocity = completedEpisodes.length / daysDiff;
+  }
+
+  // Get series name from most recent event
+  const seriesInfoQuery = mediaServerId
+    ? `SELECT series_name FROM jellyfin_watch_events
+       WHERE user_id = ? AND series_id = ? AND media_server_id = ?
+       ORDER BY timestamp DESC LIMIT 1`
+    : `SELECT series_name FROM jellyfin_watch_events
+       WHERE user_id = ? AND series_id = ?
+       ORDER BY timestamp DESC LIMIT 1`;
+
+  const seriesInfoParams = mediaServerId ? [userId, seriesId, mediaServerId] : [userId, seriesId];
+  const seriesInfo = db.prepare(seriesInfoQuery).get(...seriesInfoParams);
+
+  // Get current position (latest completed episode)
+  const latest = completedEpisodes[completedEpisodes.length - 1];
+
+  // Store velocity
+  db.prepare(`
+    INSERT OR REPLACE INTO jellyfin_user_velocity
+    (user_id, series_id, series_name, velocity, current_season, current_episode,
+     episodes_watched, first_watch, last_watch, media_server_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(
+    userId,
+    seriesId,
+    seriesInfo?.series_name || 'Unknown',
+    velocity,
+    latest.season_number,
+    latest.episode_number,
+    completedEpisodes.length,
+    firstWatch.toISOString(),
+    lastWatch.toISOString(),
+    mediaServerId
+  );
+
+  return {
+    velocity,
+    episodesWatched: completedEpisodes.length,
+    currentSeason: latest.season_number,
+    currentEpisode: latest.episode_number,
+    firstWatch,
+    lastWatch
+  };
+};
+
+/**
+ * Get velocity data for a user/show
+ */
+const getJellyfinVelocity = (userId, seriesId, mediaServerId = null) => {
+  const query = mediaServerId
+    ? `SELECT * FROM jellyfin_user_velocity
+       WHERE user_id = ? AND series_id = ? AND media_server_id = ?`
+    : `SELECT * FROM jellyfin_user_velocity
+       WHERE user_id = ? AND series_id = ?`;
+
+  const params = mediaServerId ? [userId, seriesId, mediaServerId] : [userId, seriesId];
+  return db.prepare(query).get(...params);
+};
+
+/**
+ * Get all velocity data for a user (across all shows)
+ */
+const getJellyfinUserVelocities = (userId, mediaServerId = null) => {
+  const query = mediaServerId
+    ? `SELECT * FROM jellyfin_user_velocity
+       WHERE user_id = ? AND media_server_id = ?
+       ORDER BY last_watch DESC`
+    : `SELECT * FROM jellyfin_user_velocity
+       WHERE user_id = ?
+       ORDER BY last_watch DESC`;
+
+  const params = mediaServerId ? [userId, mediaServerId] : [userId];
+  return db.prepare(query).all(...params);
+};
+
+/**
+ * Get all shows with active viewers (recent watch activity)
+ */
+const getJellyfinActiveShows = (daysActive = 30, mediaServerId = null) => {
+  const query = mediaServerId
+    ? `SELECT DISTINCT series_id, series_name, MAX(timestamp) as last_activity
+       FROM jellyfin_watch_events
+       WHERE timestamp > datetime('now', '-' || ? || ' days')
+         AND media_server_id = ?
+       GROUP BY series_id, series_name
+       ORDER BY last_activity DESC`
+    : `SELECT DISTINCT series_id, series_name, MAX(timestamp) as last_activity
+       FROM jellyfin_watch_events
+       WHERE timestamp > datetime('now', '-' || ? || ' days')
+       GROUP BY series_id, series_name
+       ORDER BY last_activity DESC`;
+
+  const params = mediaServerId ? [daysActive, mediaServerId] : [daysActive];
+  return db.prepare(query).all(...params);
+};
+
+/**
+ * Get watch history for a show (all events)
+ */
+const getJellyfinShowHistory = (seriesId, mediaServerId = null, limit = 100) => {
+  const query = mediaServerId
+    ? `SELECT * FROM jellyfin_watch_events
+       WHERE series_id = ? AND media_server_id = ?
+       ORDER BY timestamp DESC
+       LIMIT ?`
+    : `SELECT * FROM jellyfin_watch_events
+       WHERE series_id = ?
+       ORDER BY timestamp DESC
+       LIMIT ?`;
+
+  const params = mediaServerId ? [seriesId, mediaServerId, limit] : [seriesId, limit];
+  return db.prepare(query).all(...params);
+};
+
+/**
+ * Get most recent start event for calculating watch duration
+ * Used to match stop events with their corresponding start events
+ */
+const getJellyfinRecentStartEvent = (userId, episodeId, sessionId = null, mediaServerId = null) => {
+  // Look for start events within the last hour (to avoid matching very old sessions)
+  let query = `SELECT * FROM jellyfin_watch_events
+               WHERE user_id = ? AND episode_id = ? AND event_type = 'start'
+                 AND timestamp > datetime('now', '-1 hour')`;
+
+  const params = [userId, episodeId];
+
+  if (sessionId) {
+    query += ` AND session_id = ?`;
+    params.push(sessionId);
+  }
+
+  if (mediaServerId) {
+    query += ` AND media_server_id = ?`;
+    params.push(mediaServerId);
+  }
+
+  query += ` ORDER BY timestamp DESC LIMIT 1`;
+
+  return db.prepare(query).get(...params);
 };
 
 // Initialize on load
@@ -1190,5 +1584,13 @@ module.exports = {
   getMediaServerByType,
   createMediaServer,
   updateMediaServer,
-  deleteMediaServer
+  deleteMediaServer,
+  // Jellyfin webhook tracking functions
+  recordJellyfinWatchEvent,
+  calculateJellyfinVelocity,
+  getJellyfinVelocity,
+  getJellyfinUserVelocities,
+  getJellyfinActiveShows,
+  getJellyfinShowHistory,
+  getJellyfinRecentStartEvent
 };
