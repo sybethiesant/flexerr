@@ -6,6 +6,26 @@ const { db, log, getSetting } = require('../database');
 // In-memory progress tracking (not persisted, lost on restart)
 const jobProgress = new Map();
 
+/**
+ * Move a file, handling cross-device (EXDEV) errors by falling back to copy+delete
+ * @param {string} src - Source path
+ * @param {string} dest - Destination path
+ */
+async function moveFile(src, dest) {
+  try {
+    await fs.rename(src, dest);
+  } catch (err) {
+    if (err.code === 'EXDEV') {
+      // Cross-device link - use copy and delete
+      console.log('[MediaConverter] Cross-device move detected, using copy+delete');
+      await fs.copyFile(src, dest);
+      await fs.unlink(src);
+    } else {
+      throw err;
+    }
+  }
+}
+
 class MediaConverterService {
   constructor() {
     this.tempPath = getSetting('auto_convert_temp_path') || '/tmp/flexerr-convert';
@@ -411,14 +431,14 @@ class MediaConverterService {
 
       if (settings.keepOriginal) {
         const backupPath = filePath + settings.originalSuffix;
-        await fs.rename(filePath, backupPath);
+        await moveFile(filePath, backupPath);
         console.log('[MediaConverter] Original backed up to: ' + backupPath);
       } else {
         await fs.unlink(filePath);
         console.log('[MediaConverter] Original deleted');
       }
 
-      await fs.rename(tempOutput, finalOutput);
+      await moveFile(tempOutput, finalOutput);
       console.log('[MediaConverter] Conversion complete: ' + finalOutput);
 
       this.updateJobStatus(jobId, 'completed', finalOutput);

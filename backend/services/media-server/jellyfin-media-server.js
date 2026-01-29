@@ -32,6 +32,11 @@ class JellyfinMediaServer extends MediaServer {
     }
   }
 
+  // Getter for backward compatibility with code that expects .token
+  get token() {
+    return this.apiKey || this.accessToken;
+  }
+
   initClient() {
     const headers = {
       'Accept': 'application/json',

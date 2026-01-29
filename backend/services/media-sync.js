@@ -281,10 +281,10 @@ async function syncWatchHistory() {
       const serverUserId = entry.userId;
       if (!serverUserId) continue;
 
-      // Map server user to Flexerr user
+      // Map server user to Flexerr user (using media_server_id for proper multi-server support)
       const user = server.isPlex()
-        ? getUserByPlexId(serverUserId)
-        : getUserByMediaServerId(serverUserId, 'jellyfin');
+        ? getUserByPlexId(serverUserId, server.id)
+        : getUserByMediaServerId(serverUserId, server.id);
 
       if (!user) continue;
 
@@ -335,8 +335,8 @@ async function syncWatchHistory() {
     // Calculate and update velocity
     for (const [serverUserId, shows] of userShowHistory) {
       const user = server.isPlex()
-        ? getUserByPlexId(serverUserId)
-        : getUserByMediaServerId(serverUserId, 'jellyfin');
+        ? getUserByPlexId(serverUserId, server.id)
+        : getUserByMediaServerId(serverUserId, server.id);
 
       if (!user) continue;
 
@@ -424,8 +424,8 @@ async function syncUsers() {
 
     for (const serverUser of serverUsers) {
       const existingUser = serverType === 'plex'
-        ? getUserByPlexId(serverUser.id)
-        : getUserByMediaServerId(serverUser.id, 'jellyfin');
+        ? getUserByPlexId(serverUser.id, server.id)
+        : getUserByMediaServerId(serverUser.id, server.id);
 
       if (existingUser) {
         // Update existing user if needed
@@ -448,7 +448,8 @@ async function syncUsers() {
             email: serverUser.email || null,
             thumb: serverUser.thumb || null,
             is_admin: isAdmin,
-            is_owner: serverUser.isAdmin || false
+            is_owner: serverUser.isAdmin || false,
+            media_server_id: server.id
           });
         } else {
           createOrUpdateUserGeneric({
@@ -457,6 +458,7 @@ async function syncUsers() {
             username: serverUser.username,
             thumb: serverUser.thumb || null,
             is_admin: isAdmin,
+            media_server_id: server.id,
             is_owner: serverUser.isAdmin || false,
             media_server_type: 'jellyfin'
           });

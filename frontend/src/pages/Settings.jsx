@@ -585,15 +585,41 @@ export default function SettingsPage() {
       const res = await api.post('/cleanup/run', { dryRun });
       setCleanupResult(res.data);
 
+      // Handle special cases
+      if (res.data.skipped) {
+        toast.error('Cleanup skipped - another task is already running');
+        return;
+      }
+
+      if (res.data.episodes?.enabled === false) {
+        toast.error('Smart Episode Manager is disabled. Enable it in settings first.');
+        return;
+      }
+
+      if (res.data.error) {
+        toast.error(`Cleanup failed: ${res.data.error}`);
+        return;
+      }
+
+      const epAnalyzed = res.data.episodes?.episodesAnalyzed || 0;
+      const movAnalyzed = res.data.movies?.moviesAnalyzed || 0;
       const epCandidates = res.data.episodes?.deletionCandidates?.length || 0;
       const movieCandidates = res.data.movies?.deletionCandidates?.length || 0;
       const epDeleted = res.data.episodes?.deleted?.length || 0;
       const movieDeleted = res.data.movies?.deleted?.length || 0;
 
       if (dryRun) {
-        toast.success(`Preview: ${epCandidates} episodes, ${movieCandidates} movies would be cleaned up`);
+        if (epCandidates === 0 && movieCandidates === 0) {
+          toast.success(`Analyzed ${epAnalyzed} episodes, ${movAnalyzed} movies - all content within buffer zones`);
+        } else {
+          toast.success(`Preview: ${epCandidates} episodes, ${movieCandidates} movies ready for cleanup`);
+        }
       } else {
-        toast.success(`Cleanup complete: ${epDeleted} episodes, ${movieDeleted} movies deleted`);
+        if (epDeleted === 0 && movieDeleted === 0) {
+          toast.success(`Analyzed ${epAnalyzed + movAnalyzed} items - nothing met cleanup criteria`);
+        } else {
+          toast.success(`Cleanup complete: ${epDeleted} episodes, ${movieDeleted} movies deleted`);
+        }
       }
     } catch (err) {
       console.error('Cleanup failed:', err);
@@ -1243,6 +1269,42 @@ export default function SettingsPage() {
             min={1}
             max={60}
             unit="minutes"
+          />
+        </SettingRow>
+      </SettingSection>
+
+      {/* Jellyfin Settings */}
+      <SettingSection title="Jellyfin Configuration" icon={Video} collapsible defaultOpen={false}>
+        <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 mb-4">
+          <p className="text-purple-300 text-sm">
+            <strong>Jellyfin Settings</strong> configure how Flexerr tracks watch progress and
+            calculates viewing velocity for your Jellyfin media server.
+          </p>
+        </div>
+
+        <SettingRow
+          label="Completion Percentage"
+          description="Percentage watched before an episode is considered complete"
+        >
+          <NumberInput
+            value={getInt('jellyfin_completion_percentage', 90)}
+            onChange={(v) => updateSetting('jellyfin_completion_percentage', v)}
+            min={50}
+            max={100}
+            unit="%"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Velocity Window"
+          description="Number of days to look back when calculating watch velocity"
+        >
+          <NumberInput
+            value={getInt('jellyfin_velocity_window_days', 30)}
+            onChange={(v) => updateSetting('jellyfin_velocity_window_days', v)}
+            min={7}
+            max={90}
+            unit="days"
           />
         </SettingRow>
       </SettingSection>

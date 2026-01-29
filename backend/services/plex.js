@@ -139,8 +139,13 @@ class PlexService {
   }
 
   async getItemChildren(ratingKey) {
-    const response = await this.client.get(`/library/metadata/${ratingKey}/children`);
-    return response.data.MediaContainer.Metadata || [];
+    try {
+      const response = await this.client.get(`/library/metadata/${ratingKey}/children`);
+      return response.data.MediaContainer.Metadata || [];
+    } catch (err) {
+      console.error(`[Plex] Error getting children for ${ratingKey}:`, err.message);
+      return [];
+    }
   }
 
   async getWatchHistory(ratingKey = null) {
@@ -529,26 +534,35 @@ class PlexService {
    */
   async getShowEpisodesWithUserStatus(showRatingKey) {
     const episodes = [];
-    const seasons = await this.getItemChildren(showRatingKey);
+    try {
+      const seasons = await this.getItemChildren(showRatingKey);
 
-    for (const season of seasons) {
-      if (season.title === 'Specials') continue; // Skip specials by default
-
-      const seasonEpisodes = await this.getItemChildren(season.ratingKey);
-      for (const ep of seasonEpisodes) {
-        episodes.push({
-          ratingKey: ep.ratingKey,
-          title: ep.title,
-          seasonNumber: ep.parentIndex || season.index,
-          episodeNumber: ep.index,
-          absoluteIndex: episodes.length + 1,
-          duration: ep.duration,
-          addedAt: ep.addedAt ? new Date(ep.addedAt * 1000) : null,
-          viewCount: ep.viewCount || 0,
-          lastViewedAt: ep.lastViewedAt ? new Date(ep.lastViewedAt * 1000) : null,
-          grandparentRatingKey: showRatingKey
-        });
+      if (!seasons || seasons.length === 0) {
+        console.log(`[Plex] Show ${showRatingKey} has no seasons`);
+        return episodes;
       }
+
+      for (const season of seasons) {
+        if (season.title === 'Specials') continue; // Skip specials by default
+
+        const seasonEpisodes = await this.getItemChildren(season.ratingKey);
+        for (const ep of seasonEpisodes) {
+          episodes.push({
+            ratingKey: ep.ratingKey,
+            title: ep.title,
+            seasonNumber: ep.parentIndex || season.index,
+            episodeNumber: ep.index,
+            absoluteIndex: episodes.length + 1,
+            duration: ep.duration,
+            addedAt: ep.addedAt ? new Date(ep.addedAt * 1000) : null,
+            viewCount: ep.viewCount || 0,
+            lastViewedAt: ep.lastViewedAt ? new Date(ep.lastViewedAt * 1000) : null,
+            grandparentRatingKey: showRatingKey
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`[Plex] Error fetching episodes for show ${showRatingKey}:`, err.message);
     }
 
     // Sort by season and episode number
