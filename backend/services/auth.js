@@ -408,17 +408,46 @@ class AuthService {
 
   /**
    * Compare two URLs ignoring protocol and trailing slashes
+   * Also handles plex.direct URLs (e.g., 192-168-4-5.xxx.plex.direct matches 192.168.4.5)
    */
   urlsMatch(url1, url2) {
-    const normalize = (url) => {
+    const parseUrl = (url) => {
       try {
         const parsed = new URL(url);
-        return `${parsed.hostname}:${parsed.port || (parsed.protocol === 'https:' ? '443' : '80')}`;
+        const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+        return { hostname: parsed.hostname, port };
       } catch {
-        return url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const cleaned = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+        const [hostname, port = '80'] = cleaned.split(':');
+        return { hostname, port };
       }
     };
-    return normalize(url1) === normalize(url2);
+
+    const extractIpFromPlexDirect = (hostname) => {
+      // plex.direct format: 192-168-4-5.machineid.plex.direct
+      if (hostname.endsWith('.plex.direct')) {
+        const ipPart = hostname.split('.')[0]; // Get first segment (e.g., "192-168-4-5")
+        // Convert dashes to dots if it looks like an IP
+        if (/^\d+-\d+-\d+-\d+$/.test(ipPart)) {
+          return ipPart.replace(/-/g, '.');
+        }
+      }
+      return hostname;
+    };
+
+    const p1 = parseUrl(url1);
+    const p2 = parseUrl(url2);
+
+    // Direct comparison
+    if (p1.hostname === p2.hostname && p1.port === p2.port) {
+      return true;
+    }
+
+    // Try extracting IP from plex.direct URLs and compare
+    const ip1 = extractIpFromPlexDirect(p1.hostname);
+    const ip2 = extractIpFromPlexDirect(p2.hostname);
+
+    return ip1 === ip2 && p1.port === p2.port;
   }
 
   /**
