@@ -3319,6 +3319,7 @@ app.post('/api/protection/:mediaType/:tmdbId', authenticate, async (req, res) =>
           } else if (mediaType === 'movie') {
             // Find and monitor movie in Radarr
             const radarrs = RadarrService.getAllFromDb();
+            let movieFound = false;
             for (const radarr of radarrs) {
               const movies = await radarr.getMovies();
               const match = movies.find(m => {
@@ -3328,12 +3329,55 @@ app.post('/api/protection/:mediaType/:tmdbId', authenticate, async (req, res) =>
                 return tmdbMatch || titleMatch;
               });
 
-              if (match && !match.monitored) {
-                console.log(`[Protection] Found "${title}" in Radarr, setting to monitored...`);
-                match.monitored = true;
-                await radarr.client.put(`/movie/${match.id}`, match);
-                console.log(`[Protection] Set movie "${title}" to monitored`);
+              if (match) {
+                movieFound = true;
+                if (!match.monitored) {
+                  console.log(`[Protection] Found "${title}" in Radarr, setting to monitored...`);
+                  match.monitored = true;
+                  await radarr.client.put(`/movie/${match.id}`, match);
+                  console.log(`[Protection] Set movie "${title}" to monitored`);
+                }
+                // Trigger search to download if missing
+                if (!match.hasFile) {
+                  await radarr.searchMovie(match.id);
+                  console.log(`[Protection] Triggered search for movie "${title}"`);
+                }
                 break;
+              }
+            }
+
+            // If not found in Radarr, add it via WatchlistTriggerService
+            if (!movieFound) {
+              console.log(`[Protection] Movie "${title}" not in Radarr, adding via WatchlistTrigger...`);
+              const WatchlistTriggerService = require('./services/watchlist-trigger');
+              const TMDBService = require('./services/tmdb');
+              const details = await TMDBService.getMovie(parseInt(tmdbId));
+              if (details) {
+                const result = await WatchlistTriggerService.triggerDownload(parseInt(tmdbId), 'movie', details);
+                console.log(`[Protection] Added movie "${title}" to Radarr:`, result.success ? 'success' : result.error);
+              }
+            }
+          }
+
+          // Also add to Sonarr/Radarr if not found (TV shows)
+          if (mediaType === 'tv') {
+            const sonarrs = SonarrService.getAllFromDb();
+            let showFound = false;
+            for (const sonarr of sonarrs) {
+              const series = await sonarr.getSeries();
+              if (series.some(s => s.tvdbId === parseInt(tmdbId) || (title && s.title.toLowerCase() === title.toLowerCase()))) {
+                showFound = true;
+                break;
+              }
+            }
+            if (!showFound) {
+              console.log(`[Protection] TV show "${title}" not in Sonarr, adding via WatchlistTrigger...`);
+              const WatchlistTriggerService = require('./services/watchlist-trigger');
+              const TMDBService = require('./services/tmdb');
+              const details = await TMDBService.getTVShow(parseInt(tmdbId));
+              if (details) {
+                const result = await WatchlistTriggerService.triggerDownload(parseInt(tmdbId), 'tv', details);
+                console.log(`[Protection] Added TV show "${title}" to Sonarr:`, result.success ? 'success' : result.error);
               }
             }
           }
