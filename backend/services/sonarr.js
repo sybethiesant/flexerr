@@ -357,6 +357,88 @@ class SonarrService {
     const episodes = await this.getEpisodes(seriesId);
     return episodes.filter(e => !e.hasFile && e.monitored);
   }
+
+  /**
+   * Get detailed series completion status
+   * Returns: 'available' | 'partial' | 'processing' | 'pending'
+   *
+   * - available: All aired episodes are downloaded (future unaired are OK to be missing)
+   * - partial: Some aired episodes downloaded but some are missing
+   * - processing: No episodes downloaded yet, but show exists in Sonarr
+   * - pending: Show not in Sonarr
+   */
+  async getSeriesCompletionStatus(seriesId) {
+    try {
+      const episodes = await this.getEpisodes(seriesId);
+      const now = new Date();
+
+      // Filter to only aired episodes (airDateUtc in the past)
+      const airedEpisodes = episodes.filter(ep => {
+        if (!ep.airDateUtc) return false;
+        const airDate = new Date(ep.airDateUtc);
+        return airDate <= now;
+      });
+
+      // Count aired episodes with files
+      const airedWithFiles = airedEpisodes.filter(ep => ep.hasFile).length;
+      const totalAired = airedEpisodes.length;
+
+      // Also count all episodes with files (for shows with only future episodes)
+      const totalWithFiles = episodes.filter(ep => ep.hasFile).length;
+
+      if (totalAired === 0) {
+        // No aired episodes yet - show is waiting for future episodes
+        // If it has some files (specials maybe), still consider available
+        return totalWithFiles > 0 ? 'available' : 'processing';
+      }
+
+      if (airedWithFiles === 0) {
+        // No downloaded episodes at all
+        return 'processing';
+      }
+
+      if (airedWithFiles >= totalAired) {
+        // All aired episodes are downloaded
+        return 'available';
+      }
+
+      // Some but not all aired episodes downloaded
+      return 'partial';
+    } catch (error) {
+      console.error(`[Sonarr] Error getting completion status for series ${seriesId}:`, error.message);
+      return 'processing'; // Default to processing on error
+    }
+  }
+
+  /**
+   * Get series completion stats (for display purposes)
+   */
+  async getSeriesCompletionStats(seriesId) {
+    try {
+      const episodes = await this.getEpisodes(seriesId);
+      const now = new Date();
+
+      const airedEpisodes = episodes.filter(ep => {
+        if (!ep.airDateUtc) return false;
+        return new Date(ep.airDateUtc) <= now;
+      });
+
+      const airedWithFiles = airedEpisodes.filter(ep => ep.hasFile).length;
+      const totalWithFiles = episodes.filter(ep => ep.hasFile).length;
+
+      return {
+        totalEpisodes: episodes.length,
+        airedEpisodes: airedEpisodes.length,
+        downloadedEpisodes: totalWithFiles,
+        airedDownloaded: airedWithFiles,
+        missingAired: airedEpisodes.length - airedWithFiles,
+        futureEpisodes: episodes.length - airedEpisodes.length
+      };
+    } catch (error) {
+      console.error(`[Sonarr] Error getting completion stats:`, error.message);
+      return null;
+    }
+  }
 }
 
 module.exports = SonarrService;

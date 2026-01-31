@@ -147,15 +147,19 @@ function SeasonEpisodesModal({ isOpen, onClose, tmdbId, seasonNumber, showTitle,
                 >
                   <div className="flex items-start gap-4 p-4">
                     {/* Episode Thumbnail */}
-                    {ep.thumb && (
-                      <div className="flex-shrink-0 w-32 aspect-video rounded overflow-hidden bg-slate-600">
+                    <div className="flex-shrink-0 w-32 aspect-video rounded overflow-hidden bg-slate-600">
+                      {ep.thumb ? (
                         <img
                           src={ep.thumb}
                           alt={ep.title}
                           className="w-full h-full object-cover"
                         />
-                      </div>
-                    )}
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-500">
+                          <Tv className="h-8 w-8" />
+                        </div>
+                      )}
+                    </div>
 
                     {/* Episode Info */}
                     <div className="flex-1 min-w-0">
