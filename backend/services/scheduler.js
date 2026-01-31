@@ -475,13 +475,29 @@ class Scheduler {
   async runPlexWatchlistSync() {
     try {
       // Get all users with Plex tokens
-      const users = db.prepare('SELECT id, plex_token, username FROM users WHERE plex_token IS NOT NULL').all();
+      const plexUsers = db.prepare('SELECT id, plex_token, username FROM users WHERE plex_token IS NOT NULL').all();
 
-      for (const user of users) {
+      for (const user of plexUsers) {
         try {
           await WatchlistTriggerService.syncPlexWatchlist(user.id, user.plex_token);
         } catch (userError) {
-          console.warn(`[Scheduler] Watchlist sync failed for user ${user.username}:`, userError.message);
+          console.warn(`[Scheduler] Plex watchlist sync failed for user ${user.username}:`, userError.message);
+        }
+      }
+
+      // Sync Jellyfin users' favorites
+      const jellyfinUsers = db.prepare(`
+        SELECT u.id, u.username, u.jellyfin_user_id, u.media_server_id
+        FROM users u
+        JOIN media_servers ms ON u.media_server_id = ms.id
+        WHERE ms.type = 'jellyfin' AND ms.is_active = 1 AND u.jellyfin_user_id IS NOT NULL
+      `).all();
+
+      for (const user of jellyfinUsers) {
+        try {
+          await WatchlistTriggerService.syncJellyfinFavorites(user.id, user.jellyfin_user_id, user.media_server_id);
+        } catch (userError) {
+          console.warn(`[Scheduler] Jellyfin favorites sync failed for user ${user.username}:`, userError.message);
         }
       }
 
@@ -502,7 +518,7 @@ class Scheduler {
         console.warn('[Scheduler] Error checking availability:', availError.message);
       }
     } catch (error) {
-      console.error('[Scheduler] Plex watchlist sync failed:', error.message);
+      console.error('[Scheduler] Watchlist sync failed:', error.message);
     }
   }
 

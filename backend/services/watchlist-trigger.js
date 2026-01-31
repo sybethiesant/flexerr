@@ -4,12 +4,13 @@
  * Handles restoration when users re-add deleted content
  */
 
-const { db, log, getSetting } = require('../database');
+const { db, log, getSetting, getMediaServerById } = require('../database');
 const TMDBService = require('./tmdb');
 const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
 const PlexService = require('./plex');
 const NotificationService = require('./notifications');
+const JellyfinMediaServer = require('./media-server/jellyfin-media-server');
 
 class WatchlistTriggerService {
   constructor() {
@@ -799,6 +800,7 @@ class WatchlistTriggerService {
   /**
    * Sync Plex watchlist to Flexerr
    * Imports items from user's Plex watchlist and checks for existing media
+   * Also detects removals and re-adds to trigger restoration workflow
    */
   async syncPlexWatchlist(userId, userPlexToken) {
     try {
@@ -826,9 +828,20 @@ class WatchlistTriggerService {
         imported: 0,
         alreadyExists: 0,
         available: 0,
+        removed: 0,
+        restored: 0,
         errors: 0,
         items: []
       };
+
+      // Step 1: Get current active items in Flexerr's watchlist for this user
+      const flexerrWatchlist = db.prepare(`
+        SELECT tmdb_id, media_type, title FROM watchlist
+        WHERE user_id = ? AND is_active = 1
+      `).all(userId);
+
+      // Step 2: Build a set of what's currently in Plex watchlist (we'll populate as we process)
+      const plexWatchlistTmdbIds = new Set();
 
       for (const item of plexWatchlist) {
         try {
@@ -858,7 +871,10 @@ class WatchlistTriggerService {
 
           const tmdbId = tmdbMatch.id;
 
-          // Check if already in Flexerr watchlist
+          // Track this item as being in Plex watchlist
+          plexWatchlistTmdbIds.add(`${tmdbId}-${mediaType}`);
+
+          // Check if already in Flexerr watchlist (active)
           const existing = db.prepare(`
             SELECT * FROM watchlist
             WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 1
@@ -866,6 +882,82 @@ class WatchlistTriggerService {
 
           if (existing) {
             results.alreadyExists++;
+            continue;
+          }
+
+          // Check if this was previously removed (re-add scenario)
+          const previouslyRemoved = db.prepare(`
+            SELECT * FROM watchlist
+            WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 0
+          `).get(userId, tmdbId, mediaType);
+
+          if (previouslyRemoved) {
+            // This is a RE-ADD! User removed then re-added to watchlist
+            console.log(`[WatchlistSync] Detected RE-ADD: "${item.title}" - triggering restoration`);
+
+            // Get full TMDB details for restoration
+            const details = mediaType === 'movie'
+              ? await TMDBService.getMovie(tmdbId)
+              : await TMDBService.getTVShow(tmdbId);
+
+            // Re-activate the watchlist entry
+            db.prepare(`
+              UPDATE watchlist SET
+                is_active = 1,
+                added_at = CURRENT_TIMESTAMP,
+                removed_at = NULL
+              WHERE id = ?
+            `).run(previouslyRemoved.id);
+
+            // Reset the request status to trigger fresh download
+            const existingRequest = this.getRequest(tmdbId, mediaType);
+            if (existingRequest) {
+              db.prepare(`
+                UPDATE requests SET
+                  status = 'pending',
+                  available_at = NULL
+                WHERE tmdb_id = ? AND media_type = ?
+              `).run(tmdbId, mediaType);
+            }
+
+            // Handle restoration (remove from exclusions, reset lifecycle, etc.)
+            await this.handleRestoration(tmdbId, mediaType, details, userId);
+
+            // Trigger fresh download
+            const downloadResult = await this.triggerDownload(tmdbId, mediaType, details);
+            if (downloadResult.success) {
+              const status = downloadResult.alreadyHasFile ? 'available' : 'processing';
+              db.prepare(`
+                UPDATE requests SET
+                  status = ?,
+                  sonarr_id = COALESCE(?, sonarr_id),
+                  radarr_id = COALESCE(?, radarr_id)
+                WHERE tmdb_id = ? AND media_type = ?
+              `).run(
+                status,
+                downloadResult.sonarrId || null,
+                downloadResult.radarrId || null,
+                tmdbId,
+                mediaType
+              );
+              console.log(`[WatchlistSync] Restoration triggered for "${details.title}" - ${status}`);
+            }
+
+            results.restored++;
+            results.items.push({
+              title: details.title,
+              mediaType,
+              tmdbId,
+              restored: true
+            });
+
+            log('info', 'watchlist', 'watchlist_item_restored', {
+              user_id: userId,
+              tmdb_id: tmdbId,
+              media_type: mediaType,
+              media_title: details.title
+            });
+
             continue;
           }
 
@@ -1009,16 +1101,332 @@ class WatchlistTriggerService {
         }
       }
 
+      // Step 3: Detect items REMOVED from Plex watchlist
+      // Items that are in Flexerr (active) but NOT in Plex anymore
+      for (const flexerrItem of flexerrWatchlist) {
+        const key = `${flexerrItem.tmdb_id}-${flexerrItem.media_type}`;
+        if (!plexWatchlistTmdbIds.has(key)) {
+          // This item was removed from Plex watchlist
+          console.log(`[WatchlistSync] Detected REMOVAL: "${flexerrItem.title}" no longer in Plex watchlist`);
+
+          // Mark as removed in Flexerr
+          db.prepare(`
+            UPDATE watchlist SET
+              is_active = 0,
+              removed_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 1
+          `).run(userId, flexerrItem.tmdb_id, flexerrItem.media_type);
+
+          results.removed++;
+
+          log('info', 'watchlist', 'watchlist_item_removed', {
+            user_id: userId,
+            tmdb_id: flexerrItem.tmdb_id,
+            media_type: flexerrItem.media_type,
+            media_title: flexerrItem.title
+          });
+        }
+      }
+
       log('info', 'watchlist', 'plex_watchlist_synced', {
         user_id: userId,
         imported: results.imported,
         available: results.available,
+        removed: results.removed,
+        restored: results.restored,
         errors: results.errors
       });
 
       return results;
     } catch (error) {
       console.error('[WatchlistSync] Error syncing Plex watchlist:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Sync Jellyfin favorites to Flexerr
+   * Imports items from user's Jellyfin favorites and checks for existing media
+   * Also detects removals and re-adds to trigger restoration workflow
+   */
+  async syncJellyfinFavorites(userId, jellyfinUserId, mediaServerId) {
+    try {
+      await this.initialize();
+
+      // Get the Jellyfin server from media_servers table
+      const mediaServer = getMediaServerById(mediaServerId);
+      if (!mediaServer || mediaServer.type !== 'jellyfin') {
+        console.error('[JellyfinSync] Invalid or inactive Jellyfin server');
+        return { error: 'Invalid Jellyfin server', imported: 0, errors: 1 };
+      }
+
+      const jellyfin = JellyfinMediaServer.fromMediaServer(mediaServer);
+      if (!jellyfin) {
+        console.error('[JellyfinSync] Could not initialize Jellyfin client');
+        return { error: 'Could not connect to Jellyfin', imported: 0, errors: 1 };
+      }
+
+      console.log('[JellyfinSync] Fetching Jellyfin favorites...');
+
+      // Get user's favorites (Jellyfin's watchlist equivalent)
+      const jellyfinFavorites = await jellyfin.getWatchlist(jellyfinUserId);
+
+      console.log(`[JellyfinSync] Found ${jellyfinFavorites.length} items in Jellyfin favorites`);
+
+      const results = {
+        imported: 0,
+        alreadyExists: 0,
+        available: 0,
+        removed: 0,
+        restored: 0,
+        errors: 0,
+        items: []
+      };
+
+      // Step 1: Get current active items in Flexerr's watchlist for this user
+      const flexerrWatchlist = db.prepare(`
+        SELECT tmdb_id, media_type, title FROM watchlist
+        WHERE user_id = ? AND is_active = 1
+      `).all(userId);
+
+      // Step 2: Build a set of what's currently in Jellyfin favorites
+      const jellyfinFavoritesTmdbIds = new Set();
+
+      for (const item of jellyfinFavorites) {
+        try {
+          // Jellyfin items already have TMDB IDs extracted
+          const tmdbId = item.tmdbId;
+          const mediaType = item.type === 'movie' ? 'movie' : 'tv';
+
+          if (!tmdbId) {
+            console.log(`[JellyfinSync] Could not find TMDB ID for "${item.title}"`);
+            results.errors++;
+            continue;
+          }
+
+          // Track this item as being in Jellyfin favorites
+          jellyfinFavoritesTmdbIds.add(`${tmdbId}-${mediaType}`);
+
+          // Check if already in Flexerr watchlist (active)
+          const existing = db.prepare(`
+            SELECT * FROM watchlist
+            WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 1
+          `).get(userId, tmdbId, mediaType);
+
+          if (existing) {
+            results.alreadyExists++;
+            continue;
+          }
+
+          // Check if this was previously removed (re-add scenario)
+          const previouslyRemoved = db.prepare(`
+            SELECT * FROM watchlist
+            WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 0
+          `).get(userId, tmdbId, mediaType);
+
+          if (previouslyRemoved) {
+            // This is a RE-ADD! User removed then re-added to favorites
+            console.log(`[JellyfinSync] Detected RE-ADD: "${item.title}" - triggering restoration`);
+
+            // Get full TMDB details for restoration
+            const details = mediaType === 'movie'
+              ? await TMDBService.getMovie(tmdbId)
+              : await TMDBService.getTVShow(tmdbId);
+
+            // Re-activate the watchlist entry
+            db.prepare(`
+              UPDATE watchlist SET
+                is_active = 1,
+                added_at = CURRENT_TIMESTAMP,
+                removed_at = NULL
+              WHERE id = ?
+            `).run(previouslyRemoved.id);
+
+            // Reset the request status to trigger fresh download
+            const existingRequest = this.getRequest(tmdbId, mediaType);
+            if (existingRequest) {
+              db.prepare(`
+                UPDATE requests SET
+                  status = 'pending',
+                  available_at = NULL
+                WHERE tmdb_id = ? AND media_type = ?
+              `).run(tmdbId, mediaType);
+            }
+
+            // Handle restoration
+            await this.handleRestoration(tmdbId, mediaType, details, userId);
+
+            // Trigger fresh download
+            const downloadResult = await this.triggerDownload(tmdbId, mediaType, details);
+            if (downloadResult.success) {
+              const status = downloadResult.alreadyHasFile ? 'available' : 'processing';
+              db.prepare(`
+                UPDATE requests SET
+                  status = ?,
+                  sonarr_id = COALESCE(?, sonarr_id),
+                  radarr_id = COALESCE(?, radarr_id)
+                WHERE tmdb_id = ? AND media_type = ?
+              `).run(
+                status,
+                downloadResult.sonarrId || null,
+                downloadResult.radarrId || null,
+                tmdbId,
+                mediaType
+              );
+              console.log(`[JellyfinSync] Restoration triggered for "${details.title}" - ${status}`);
+            }
+
+            results.restored++;
+            results.items.push({
+              title: details.title,
+              mediaType,
+              tmdbId,
+              restored: true
+            });
+
+            log('info', 'watchlist', 'jellyfin_favorite_restored', {
+              user_id: userId,
+              tmdb_id: tmdbId,
+              media_type: mediaType,
+              media_title: details.title
+            });
+
+            continue;
+          }
+
+          // New item - get full TMDB details
+          const details = mediaType === 'movie'
+            ? await TMDBService.getMovie(tmdbId)
+            : await TMDBService.getTVShow(tmdbId);
+
+          // Check if media already exists in library
+          const existsInLibrary = await this.checkExistsInLibrary(tmdbId, mediaType, details);
+
+          // Get external IDs
+          const externalIds = details.external_ids || await TMDBService.getExternalIds(tmdbId, mediaType);
+          const imdbId = externalIds?.imdb_id || null;
+
+          // Add to Flexerr watchlist
+          db.prepare(`
+            INSERT INTO watchlist (user_id, tmdb_id, media_type, title, poster_path, imdb_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, tmdb_id, media_type) DO UPDATE SET
+              is_active = 1,
+              added_at = CURRENT_TIMESTAMP,
+              removed_at = NULL,
+              imdb_id = COALESCE(excluded.imdb_id, imdb_id)
+          `).run(userId, tmdbId, mediaType, details.title, details.poster_path, imdbId);
+
+          // Create request record if needed
+          const existingRequest = this.getRequest(tmdbId, mediaType);
+
+          if (!existingRequest) {
+            db.prepare(`
+              INSERT INTO requests (
+                user_id, tmdb_id, tvdb_id, imdb_id, media_type, title, year,
+                poster_path, backdrop_path, overview, status, sonarr_id, radarr_id, seasons, media_server_id
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              userId,
+              tmdbId,
+              externalIds?.tvdb_id || null,
+              externalIds?.imdb_id || null,
+              mediaType,
+              details.title,
+              details.year,
+              details.poster_path,
+              details.backdrop_path,
+              details.overview,
+              existsInLibrary.exists ? 'available' : 'pending',
+              existsInLibrary.sonarrId || null,
+              existsInLibrary.radarrId || null,
+              mediaType === 'tv' ? JSON.stringify(details.seasons?.map(s => s.season_number).filter(n => n > 0)) : null,
+              mediaServerId
+            );
+
+            this.updateDailyStats('requests');
+
+            if (existsInLibrary.exists) {
+              this.updateDailyStats('available');
+              results.available++;
+            } else {
+              // Trigger download
+              try {
+                const downloadResult = await this.triggerDownload(tmdbId, mediaType, details);
+                if (downloadResult.success) {
+                  const status = downloadResult.alreadyHasFile ? 'available' : 'processing';
+                  db.prepare(`
+                    UPDATE requests SET
+                      status = ?,
+                      sonarr_id = ?,
+                      radarr_id = ?
+                    WHERE tmdb_id = ? AND media_type = ?
+                  `).run(
+                    status,
+                    downloadResult.sonarrId || null,
+                    downloadResult.radarrId || null,
+                    tmdbId,
+                    mediaType
+                  );
+                  console.log(`[JellyfinSync] Triggered download for "${details.title}"`);
+                }
+              } catch (dlError) {
+                console.error(`[JellyfinSync] Download trigger error for "${details.title}":`, dlError.message);
+              }
+            }
+          }
+
+          results.imported++;
+          results.items.push({
+            title: details.title,
+            mediaType,
+            tmdbId,
+            existsInLibrary: existsInLibrary.exists
+          });
+
+          console.log(`[JellyfinSync] Imported "${details.title}" (${existsInLibrary.exists ? 'available' : 'pending'})`);
+        } catch (itemError) {
+          console.error(`[JellyfinSync] Error processing "${item.title}":`, itemError.message);
+          results.errors++;
+        }
+      }
+
+      // Step 3: Detect items REMOVED from Jellyfin favorites
+      for (const flexerrItem of flexerrWatchlist) {
+        const key = `${flexerrItem.tmdb_id}-${flexerrItem.media_type}`;
+        if (!jellyfinFavoritesTmdbIds.has(key)) {
+          console.log(`[JellyfinSync] Detected REMOVAL: "${flexerrItem.title}" no longer in Jellyfin favorites`);
+
+          db.prepare(`
+            UPDATE watchlist SET
+              is_active = 0,
+              removed_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 1
+          `).run(userId, flexerrItem.tmdb_id, flexerrItem.media_type);
+
+          results.removed++;
+
+          log('info', 'watchlist', 'jellyfin_favorite_removed', {
+            user_id: userId,
+            tmdb_id: flexerrItem.tmdb_id,
+            media_type: flexerrItem.media_type,
+            media_title: flexerrItem.title
+          });
+        }
+      }
+
+      log('info', 'watchlist', 'jellyfin_favorites_synced', {
+        user_id: userId,
+        imported: results.imported,
+        available: results.available,
+        removed: results.removed,
+        restored: results.restored,
+        errors: results.errors
+      });
+
+      return results;
+    } catch (error) {
+      console.error('[JellyfinSync] Error syncing Jellyfin favorites:', error);
       throw error;
     }
   }
