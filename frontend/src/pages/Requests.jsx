@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, useAuth } from '../App';
 import {
   Clock, Film, Tv, Loader2, CheckCircle, Download, XCircle,
@@ -27,10 +27,12 @@ function StatusBadge({ status }) {
 
 export default function Requests() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [requests, setRequests] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all, pending, processing, available
+  const initialStatus = searchParams.get('status') || 'all';
+  const [filter, setFilter] = useState(initialStatus); // all, pending, processing, available
   const [mediaTypeFilter, setMediaTypeFilter] = useState('all'); // all, movie, tv
   const [userFilter, setUserFilter] = useState('all'); // all or username
 
@@ -62,7 +64,12 @@ export default function Requests() {
   };
 
   const filteredRequests = requests.filter(r => {
-    if (filter !== 'all' && r.status !== filter) return false;
+    // Available filter includes both 'available' and 'partial' status
+    if (filter === 'available') {
+      if (r.status !== 'available' && r.status !== 'partial') return false;
+    } else if (filter !== 'all' && r.status !== filter) {
+      return false;
+    }
     if (mediaTypeFilter !== 'all' && r.media_type !== mediaTypeFilter) return false;
     if (userFilter !== 'all' && r.requested_by !== userFilter) return false;
     return true;
@@ -71,7 +78,8 @@ export default function Requests() {
   const stats = {
     pending: requests.filter(r => r.status === 'pending').length,
     processing: requests.filter(r => r.status === 'processing').length,
-    available: requests.filter(r => r.status === 'available').length,
+    // Available includes both 'available' and 'partial' items
+    available: requests.filter(r => r.status === 'available' || r.status === 'partial').length,
   };
 
   if (loading) {
@@ -103,7 +111,11 @@ export default function Requests() {
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         <button
-          onClick={() => setFilter(filter === 'pending' ? 'all' : 'pending')}
+          onClick={() => {
+            const newFilter = filter === 'pending' ? 'all' : 'pending';
+            setFilter(newFilter);
+            setSearchParams(newFilter === 'all' ? {} : { status: newFilter });
+          }}
           className={`p-4 rounded-lg text-center transition-all ${
             filter === 'pending'
               ? 'bg-yellow-500/20 ring-2 ring-yellow-500'
@@ -114,7 +126,11 @@ export default function Requests() {
           <div className="text-sm text-slate-400">Pending</div>
         </button>
         <button
-          onClick={() => setFilter(filter === 'processing' ? 'all' : 'processing')}
+          onClick={() => {
+            const newFilter = filter === 'processing' ? 'all' : 'processing';
+            setFilter(newFilter);
+            setSearchParams(newFilter === 'all' ? {} : { status: newFilter });
+          }}
           className={`p-4 rounded-lg text-center transition-all ${
             filter === 'processing'
               ? 'bg-blue-500/20 ring-2 ring-blue-500'
@@ -125,7 +141,11 @@ export default function Requests() {
           <div className="text-sm text-slate-400">Downloading</div>
         </button>
         <button
-          onClick={() => setFilter(filter === 'available' ? 'all' : 'available')}
+          onClick={() => {
+            const newFilter = filter === 'available' ? 'all' : 'available';
+            setFilter(newFilter);
+            setSearchParams(newFilter === 'all' ? {} : { status: newFilter });
+          }}
           className={`p-4 rounded-lg text-center transition-all ${
             filter === 'available'
               ? 'bg-green-500/20 ring-2 ring-green-500'
@@ -180,7 +200,7 @@ export default function Requests() {
         )}
         {(filter !== 'all' || userFilter !== 'all') && (
           <button
-            onClick={() => { setFilter('all'); setUserFilter('all'); }}
+            onClick={() => { setFilter('all'); setUserFilter('all'); setSearchParams({}); }}
             className="text-sm text-primary-400 hover:text-primary-300"
           >
             Clear filters

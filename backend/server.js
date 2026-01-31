@@ -1039,23 +1039,40 @@ app.get('/api/plex/episodes/:tmdbId', authenticate, async (req, res) => {
       if (season && s.index !== parseInt(season)) continue;
 
       const episodes = await plex.getItemChildren(s.ratingKey);
+
+      // Fetch TMDB season data for fallback episode stills
+      let tmdbEpisodes = [];
+      try {
+        const tmdbSeason = await TMDBService.getTVSeason(tmdbId, s.index);
+        tmdbEpisodes = tmdbSeason.episodes || [];
+      } catch (e) {
+        // TMDB lookup failed, continue without fallback images
+      }
+
       const seasonData = {
         seasonNumber: s.index,
         ratingKey: s.ratingKey,
         title: s.title,
         thumb: s.thumb ? `${plex.url}${s.thumb}?X-Plex-Token=${plex.token}` : null,
-        episodes: episodes.map(ep => ({
-          episodeNumber: ep.index,
-          ratingKey: ep.ratingKey,
-          title: ep.title,
-          summary: ep.summary,
-          thumb: ep.thumb ? `${plex.url}${ep.thumb}?X-Plex-Token=${plex.token}` : null,
-          duration: ep.duration,
-          viewCount: ep.viewCount || 0,
-          viewOffset: ep.viewOffset || 0,
-          lastViewedAt: ep.lastViewedAt ? new Date(ep.lastViewedAt * 1000) : null,
-          watchUrl: `https://app.plex.tv/desktop/#!/server/${machineId}/details?key=%2Flibrary%2Fmetadata%2F${ep.ratingKey}`
-        }))
+        episodes: episodes.map(ep => {
+          // Find matching TMDB episode for fallback still
+          const tmdbEp = tmdbEpisodes.find(te => te.episode_number === ep.index);
+          const plexThumb = ep.thumb ? `${plex.url}${ep.thumb}?X-Plex-Token=${plex.token}` : null;
+
+          return {
+            episodeNumber: ep.index,
+            ratingKey: ep.ratingKey,
+            title: ep.title,
+            summary: ep.summary,
+            // Prefer TMDB still (CDN accessible) over Plex thumb (local IP)
+            thumb: tmdbEp?.still_path || plexThumb || null,
+            duration: ep.duration,
+            viewCount: ep.viewCount || 0,
+            viewOffset: ep.viewOffset || 0,
+            lastViewedAt: ep.lastViewedAt ? new Date(ep.lastViewedAt * 1000) : null,
+            watchUrl: `https://app.plex.tv/desktop/#!/server/${machineId}/details?key=%2Flibrary%2Fmetadata%2F${ep.ratingKey}`
+          };
+        })
       };
       result.seasons.push(seasonData);
     }

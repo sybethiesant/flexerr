@@ -120,7 +120,8 @@ export default function Dashboard() {
         watchlistCount: allWatchlist.length,
         pendingCount: allRequests.filter(r => r.status === 'pending').length,
         processingCount: allRequests.filter(r => r.status === 'processing').length,
-        availableCount: allRequests.filter(r => r.status === 'available').length,
+        // Available includes both 'available' and 'partial' status
+        availableCount: allRequests.filter(r => r.status === 'available' || r.status === 'partial').length,
       });
 
       // Only display first 10 in UI
@@ -184,21 +185,33 @@ export default function Dashboard() {
           </div>
         </Link>
 
-        <div className="bg-slate-800 rounded-lg p-4">
-          <Download className="h-8 w-8 text-blue-400" />
+        <Link
+          to="/requests?status=processing"
+          className="bg-slate-800 rounded-lg p-4 hover:bg-slate-700 transition-colors group"
+        >
+          <div className="flex items-center justify-between">
+            <Download className="h-8 w-8 text-blue-400" />
+            <ArrowRight className="h-5 w-5 text-slate-600 group-hover:text-primary-400 transition-colors" />
+          </div>
           <div className="mt-3">
             <div className="text-2xl font-bold text-white">{stats.processingCount}</div>
             <div className="text-sm text-slate-400">Downloading</div>
           </div>
-        </div>
+        </Link>
 
-        <div className="bg-slate-800 rounded-lg p-4">
-          <CheckCircle className="h-8 w-8 text-green-400" />
+        <Link
+          to="/requests?status=available"
+          className="bg-slate-800 rounded-lg p-4 hover:bg-slate-700 transition-colors group"
+        >
+          <div className="flex items-center justify-between">
+            <CheckCircle className="h-8 w-8 text-green-400" />
+            <ArrowRight className="h-5 w-5 text-slate-600 group-hover:text-primary-400 transition-colors" />
+          </div>
           <div className="mt-3">
             <div className="text-2xl font-bold text-white">{stats.availableCount}</div>
             <div className="text-sm text-slate-400">Available</div>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* My Watchlist */}
