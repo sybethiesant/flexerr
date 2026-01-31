@@ -13,9 +13,9 @@ const PLEX_PRODUCT = 'Flexerr';
 const PLEX_DEVICE = 'Flexerr Server';
 
 // JWT Configuration
-// Extended access token for better UX while maintaining security
-const ACCESS_TOKEN_EXPIRY = '4h';  // 4 hours for active sessions
-const REFRESH_TOKEN_EXPIRY_DAYS = 30;  // 30 days for persistent login
+// Extended tokens for persistent login - user preference over frequent re-auth
+const ACCESS_TOKEN_EXPIRY = '30d';  // 30 days for active sessions
+const REFRESH_TOKEN_EXPIRY_DAYS = 365;  // 1 year for persistent login
 
 class AuthService {
   constructor() {

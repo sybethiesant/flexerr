@@ -12,7 +12,7 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 - **Smart Episode Manager** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from any cleanup rules
 - **Leaving Soon Collection** - Grace period before deletion with collection visibility
-- **Watchlist Restoration** - Re-adding to watchlist triggers re-download of deleted content
+- **Watchlist Sync & Restoration** - Tracks watchlist removals and re-adds; re-adding triggers automatic restoration and fresh download
 - **Rules Engine** - Flexible cleanup rules based on watch status, age, ratings, and more
 - **Media Repair** - Quality upgrades and Dolby Vision Profile 5 conversion
 - **Multi-User Support** - Each user has their own watchlist and viewing history
@@ -30,8 +30,8 @@ User Watchlist → Auto-Download → Watch → Smart Cleanup → Re-watchlist Re
 4. User watches the content
 5. Smart Episode Manager tracks watch progress and velocity
 6. Cleanup rules add content to "Leaving Soon" collection (grace period)
-7. If user re-adds to watchlist, content is restored
-8. Otherwise, content is cleaned up to save storage
+7. Content is cleaned up to save storage
+8. **If user re-adds to watchlist later**, Flexerr detects the re-add and triggers a fresh download cycle (restoration)
 
 **Note:** Protected items bypass all cleanup rules regardless of other settings.
 
@@ -128,6 +128,33 @@ services:
     # devices:
     #   - /dev/dri:/dev/dri
 ```
+
+## Watchlist Sync & Restoration
+
+Flexerr continuously syncs with Plex watchlists and Jellyfin favorites, detecting both additions and removals.
+
+### How It Works
+
+1. **Addition Detection** - New watchlist items trigger automatic download via Sonarr/Radarr
+2. **Removal Tracking** - Items removed from watchlist are marked as removed in Flexerr
+3. **Re-Add Detection** - If a user adds back a previously removed item, Flexerr detects this as a restoration
+4. **Automatic Restoration** - Re-added items trigger fresh download cycle, removing from exclusion lists and resetting lifecycle
+
+### Use Case: Content Recovery
+
+This enables users to recover content that was cleaned up:
+
+1. User watches a show, removes from watchlist
+2. Smart cleanup eventually deletes the files
+3. Months later, user wants to rewatch
+4. User simply adds back to Plex watchlist or Jellyfin favorites
+5. Flexerr automatically:
+   - Detects the re-add
+   - Removes from Sonarr/Radarr exclusion lists
+   - Resets lifecycle status
+   - Triggers fresh download
+
+No admin intervention required - users can self-service restore their content.
 
 ## Smart Episode Manager
 
