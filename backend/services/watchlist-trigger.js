@@ -693,6 +693,7 @@ class WatchlistTriggerService {
 
   /**
    * Check for availability updates (called periodically)
+   * Updates status to: available, partial, or keeps processing
    */
   async checkAvailability() {
     try {
@@ -700,33 +701,63 @@ class WatchlistTriggerService {
 
       // Get processing requests
       const pendingRequests = db.prepare(`
-        SELECT * FROM requests WHERE status IN ('pending', 'processing')
+        SELECT * FROM requests WHERE status IN ('pending', 'processing', 'partial')
       `).all();
 
       for (const request of pendingRequests) {
-        let isAvailable = false;
+        let newStatus = null;
 
-        if (request.media_type === 'movie' && request.radarr_id && this.radarr) {
-          const movie = await this.radarr.getMovieById(request.radarr_id);
-          isAvailable = movie?.hasFile === true;
-        } else if (request.media_type === 'tv' && request.sonarr_id && this.sonarr) {
-          const series = await this.sonarr.getSeriesById(request.sonarr_id);
-          // Consider available if at least one episode has a file
-          isAvailable = series?.episodeFileCount > 0;
+        try {
+          if (request.media_type === 'movie' && request.radarr_id && this.radarr) {
+            const movie = await this.radarr.getMovieById(request.radarr_id);
+            if (movie?.hasFile === true) {
+              newStatus = 'available';
+            }
+          } else if (request.media_type === 'tv' && request.sonarr_id && this.sonarr) {
+            // Use detailed completion status for TV shows
+            newStatus = await this.sonarr.getSeriesCompletionStatus(request.sonarr_id);
+          }
+        } catch (err) {
+          // Handle 404 errors (deleted from Sonarr/Radarr) - clear the stale ID
+          if (err.response?.status === 404) {
+            console.warn(`[WatchlistTrigger] ${request.title} not found in arr - clearing stale ID`);
+            if (request.media_type === 'movie') {
+              db.prepare('UPDATE requests SET radarr_id = NULL WHERE id = ?').run(request.id);
+            } else {
+              db.prepare('UPDATE requests SET sonarr_id = NULL WHERE id = ?').run(request.id);
+            }
+          }
+          continue; // Skip to next request
         }
 
-        if (isAvailable) {
-          this.markRequestAvailable(request.tmdb_id, request.media_type);
-          log('info', 'watchlist', 'request_available', {
+        // Update status if changed
+        if (newStatus && newStatus !== request.status) {
+          this.updateRequestStatus(request.tmdb_id, request.media_type, newStatus);
+          log('info', 'watchlist', `request_${newStatus}`, {
             tmdb_id: request.tmdb_id,
             media_type: request.media_type,
-            media_title: request.title
+            media_title: request.title,
+            old_status: request.status
           });
         }
       }
     } catch (error) {
       console.error('[WatchlistTrigger] Error checking availability:', error);
     }
+  }
+
+  /**
+   * Update request status to a specific value
+   */
+  updateRequestStatus(tmdbId, mediaType, status) {
+    const updates = status === 'available'
+      ? 'status = ?, available_at = CURRENT_TIMESTAMP'
+      : 'status = ?';
+
+    db.prepare(`
+      UPDATE requests SET ${updates}
+      WHERE tmdb_id = ? AND media_type = ?
+    `).run(status, tmdbId, mediaType);
   }
 
   /**
