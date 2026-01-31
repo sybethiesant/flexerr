@@ -177,6 +177,28 @@ class WatchlistTriggerService {
         username: user?.username
       });
 
+      // Push to user's Plex watchlist so sync doesn't remove it
+      try {
+        const userRecord = db.prepare('SELECT plex_token, media_server_type FROM users WHERE id = ?').get(userId);
+        if (userRecord?.plex_token && userRecord.media_server_type === 'plex') {
+          // Note: URL doesn't matter for Plex.tv API calls, only token
+          const userPlex = new PlexService('https://plex.tv', userRecord.plex_token);
+          const plexResult = await userPlex.addToWatchlistBySearch(
+            details.title,
+            details.year,
+            mediaType,
+            imdbId
+          );
+          if (plexResult.success) {
+            console.log(`[WatchlistTrigger] Pushed "${details.title}" to Plex watchlist for ${user?.username}`);
+          } else {
+            console.warn(`[WatchlistTrigger] Could not push to Plex: ${plexResult.error}`);
+          }
+        }
+      } catch (plexError) {
+        console.error('[WatchlistTrigger] Error pushing to Plex watchlist:', plexError.message);
+      }
+
       // Send Discord notification
       try {
         await NotificationService.notifyWatchlistAdd({

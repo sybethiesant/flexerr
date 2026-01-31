@@ -44,7 +44,7 @@ All notable changes to Flexerr will be documented in this file.
 
 ### Fixed
 
-- **CRITICAL: Smart Cleanup Broken by Jellyfin Support**: Fixed fatal bug where the Jellyfin media server abstraction layer broke smart cleanup for ALL users. The abstraction layer was missing Plex-specific methods like `analyzeShowWatchProgress()` that smart cleanup depends on. Smart cleanup now correctly uses `PlexService` directly while Jellyfin support is improved.
+- **CRITICAL: VIPER Broken by Jellyfin Support**: Fixed fatal bug where the Jellyfin media server abstraction layer broke VIPER for ALL users. The abstraction layer was missing Plex-specific methods like `analyzeShowWatchProgress()` that VIPER depends on. Smart cleanup now correctly uses `PlexService` directly while Jellyfin support is improved.
 
 - **Sonarr Auto-Redownload Bug**: Fixed critical bug where deleted episodes were NOT being unmonitored in Sonarr, causing them to automatically re-download. Now ALL deleted episodes are properly unmonitored to prevent unwanted redownloads.
 
@@ -62,7 +62,7 @@ All notable changes to Flexerr will be documented in this file.
 
 ### Technical Details
 
-- Smart Episode Manager temporarily forced to use legacy `PlexService` until Jellyfin velocity tracking is implemented
+- VIPER temporarily forced to use legacy `PlexService` until Jellyfin velocity tracking is implemented
 - Added comprehensive Jellyfin implementation audit documenting ~45% feature parity
 - MediaServerFactory architecture confirmed ready for dual-server operation
 
@@ -128,7 +128,7 @@ All notable changes to Flexerr will be documented in this file.
 - Initial release
 - Plex OAuth authentication with multi-user support
 - Watchlist integration with automatic Sonarr/Radarr downloads
-- Smart Episode Manager with velocity-based cleanup
+- VIPER with velocity-based cleanup
 - Leaving Soon collection for deletion grace periods
 - Watchlist restoration (re-add triggers re-download)
 - Rules engine for custom cleanup policies

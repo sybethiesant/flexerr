@@ -3,7 +3,7 @@ const PlexService = require('./plex');
 const { MediaServerFactory } = require('./media-server');
 const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
-const SmartEpisodeManager = require('./smart-episodes');
+const Viper = require('./smart-episodes');
 
 class RulesEngine {
   constructor() {
@@ -1151,7 +1151,7 @@ class RulesEngine {
   async evaluateSmartRule(rule, dryRun = true) {
     await this.initialize();
 
-    const smartManager = new SmartEpisodeManager();
+    const smartManager = new Viper();
     await smartManager.initialize();
 
     // Build smart options from rule settings
@@ -1297,7 +1297,7 @@ class RulesEngine {
                     if (sonarrEp) {
                       await sonarr.monitorEpisode(sonarrEp.id, true);
                       await sonarr.searchEpisode(sonarrEp.id);
-                      log('info', 'smart-episodes', 'Triggered proactive re-download', {
+                      log('info', 'viper', 'Triggered proactive re-download', {
                         rule_id: rule.id,
                         media_title: `${show.title} S${ep.seasonNumber}E${ep.episodeNumber}`,
                         media_type: 'episode'

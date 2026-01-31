@@ -9,7 +9,7 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 - **Multi-Server Support** - Works with Plex (OAuth) and Jellyfin (username/password)
 - **Watchlist Integration** - Sync with Plex watchlists or Jellyfin favorites for automatic requests
 - **Auto-Download** - Watchlist additions trigger Sonarr/Radarr downloads automatically
-- **Smart Episode Manager** - Intelligent episode cleanup based on user watch velocity
+- **VIPER** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from any cleanup rules
 - **Leaving Soon Collection** - Grace period before deletion with collection visibility
 - **Watchlist Sync & Restoration** - Tracks watchlist removals and re-adds; re-adding triggers automatic restoration and fresh download
@@ -21,14 +21,14 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 ## How It Works
 
 ```
-User Watchlist → Auto-Download → Watch → Smart Cleanup → Re-watchlist Restores
+User Watchlist → Auto-Download → Watch → VIPER Cleanup → Re-watchlist Restores
 ```
 
 1. User adds content to their Plex watchlist or Jellyfin favorites
 2. Flexerr detects the addition and sends to Sonarr/Radarr
 3. Content downloads automatically
 4. User watches the content
-5. Smart Episode Manager tracks watch progress and velocity
+5. VIPER tracks watch progress and velocity
 6. Cleanup rules add content to "Leaving Soon" collection (grace period)
 7. Content is cleaned up to save storage
 8. **If user re-adds to watchlist later**, Flexerr detects the re-add and triggers a fresh download cycle (restoration)
@@ -156,9 +156,9 @@ This enables users to recover content that was cleaned up:
 
 No admin intervention required - users can self-service restore their content.
 
-## Smart Episode Manager
+## VIPER - Velocity-Informed Protection & Episode Removal
 
-The Smart Episode Manager intelligently manages TV show episodes based on each user's watch progress and velocity.
+VIPER intelligently manages TV show episodes based on each user's watch progress and velocity.
 
 ### How It Works
 
@@ -201,7 +201,7 @@ Protect specific movies or TV shows from any deletion - a priority override for 
 ### Protection Behavior
 
 - **Priority 1 Override** - Protected items are NEVER deleted by any rule
-- **Bypasses Smart Cleanup** - Ignored by velocity-based episode management
+- **Bypasses VIPER Cleanup** - Ignored by velocity-based episode management
 - **Bypasses Rules Engine** - Ignored by all cleanup rules
 - **Auto-Monitor** (NEW!) - Automatically sets to monitored in Sonarr/Radarr
 - **Auto-Search** (TV Shows) - Triggers search for ALL episodes to ensure availability
@@ -214,7 +214,7 @@ Protect specific movies or TV shows from any deletion - a priority override for 
 1. Series set to `monitored: true` in Sonarr
 2. ALL episodes set to monitored (including previously unmonitored ones)
 3. Series search triggered to download any missing episodes
-4. Episodes will never be deleted by smart cleanup or rules
+4. Episodes will never be deleted by VIPER or rules
 
 **Movies:**
 1. Movie set to `monitored: true` in Radarr
@@ -222,7 +222,7 @@ Protect specific movies or TV shows from any deletion - a priority override for 
 
 ## Rules Engine
 
-Create custom cleanup rules for content that doesn't fit the smart cleanup model.
+Create custom cleanup rules for content that doesn't fit the VIPER model.
 
 ### Available Conditions
 
@@ -281,7 +281,7 @@ Jellyfin uses username/password authentication:
 - Jellyfin uses Favorites as a watchlist equivalent since Jellyfin lacks native watchlist support
 - **Smart cleanup currently requires Plex** - Jellyfin velocity tracking is in development
 - Basic features work: browsing, requesting, watch history, collections
-- Advanced features (smart cleanup, velocity tracking) are Plex-only for now
+- Advanced features (VIPER, velocity tracking) are Plex-only for now
 
 ### Sonarr / Radarr
 
@@ -334,14 +334,14 @@ The admin dashboard provides:
 ### Smart cleanup not running
 
 - **Smart cleanup requires Plex** - Jellyfin velocity tracking coming soon
-- Check Settings → Smart Episode Manager is enabled
+- Check Settings → VIPER is enabled
 - Verify the cleanup schedule is set
 - Check Media Server Sync is enabled and running
 - Check logs for errors - admin dashboard shows detailed error reporting
 
 ### Content deleted too soon
 
-- Increase "Days Buffer" in Smart Episode Manager
+- Increase "Days Buffer" in VIPER
 - Add content to watchlist to protect it
 - **Use the Protect toggle** on the media detail page for permanent protection
 - Check "Leaving Soon" collection for upcoming deletions
@@ -409,7 +409,7 @@ flexerr/
 │       ├── radarr.js       # Radarr integration
 │       ├── tmdb.js         # TMDB API
 │       ├── rules-engine.js # Cleanup rules
-│       ├── smart-episodes.js # Smart cleanup
+│       ├── smart-episodes.js # VIPER engine
 │       ├── scheduler.js    # Job scheduling
 │       └── media-server/   # Multi-server abstraction
 │           ├── media-server.js

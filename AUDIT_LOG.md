@@ -185,7 +185,7 @@ const httpsAgent = new (require('https').Agent)({ rejectUnauthorized: false });
 
 ### Verified Working
 - Protection feature API endpoints functional
-- Smart Episode Manager protection checks in place
+- VIPER protection checks in place
 - Rules Engine protection checks in place
 - Frontend protection toggle UI implemented
 - Database schema supports all features

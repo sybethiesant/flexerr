@@ -863,8 +863,7 @@ class PlexService {
    */
   async addToPlexWatchlist(ratingKey) {
     try {
-      // Plex watchlist uses GUIDs, so we need to get the item's GUID first
-      // For discover items, we can use the ratingKey directly
+      // Note: Don't use X-Plex-Client-Identifier for Plex.tv APIs - causes 401
       const response = await axios.put(
         `https://discover.provider.plex.tv/actions/addToWatchlist`,
         null,
@@ -874,7 +873,6 @@ class PlexService {
           },
           headers: {
             'X-Plex-Token': this.token,
-            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
             'Accept': 'application/json'
           }
         }
@@ -891,6 +889,7 @@ class PlexService {
    */
   async removeFromPlexWatchlist(ratingKey) {
     try {
+      // Note: Don't use X-Plex-Client-Identifier for Plex.tv APIs - causes 401
       const response = await axios.put(
         `https://discover.provider.plex.tv/actions/removeFromWatchlist`,
         null,
@@ -900,7 +899,6 @@ class PlexService {
           },
           headers: {
             'X-Plex-Token': this.token,
-            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
             'Accept': 'application/json'
           }
         }
@@ -937,30 +935,128 @@ class PlexService {
   }
 
   /**
-   * Search Plex discover for an item (to get ratingKey for watchlist operations)
+   * Search Plex metadata for an item by title (to get ratingKey for watchlist operations)
+   * Uses metadata.provider.plex.tv which is more reliable than the search endpoint
+   * Note: Don't pass year to API - it returns wrong matches. Post-filter by IMDB/TMDB instead.
    */
   async searchDiscover(query, mediaType = null) {
     try {
-      const searchType = mediaType === 'movie' ? 1 : mediaType === 'tv' ? 2 : null;
+      const type = mediaType === 'movie' ? 1 : mediaType === 'tv' ? 2 : 1;
+      const agent = mediaType === 'tv' ? 'tv.plex.agents.series' : 'tv.plex.agents.movie';
+
+      // Extract year from query if present (e.g., "Green Room 2016") - for logging only
+      const yearMatch = query.match(/\s+(\d{4})$/);
+      const title = yearMatch ? query.replace(/\s+\d{4}$/, '').trim() : query;
+
+      // Don't include year in API params - causes incorrect matches
+      // We'll post-filter by IMDB/TMDB ID or title+year match instead
+      const params = {
+        type,
+        title,
+        agent
+      };
+
+      // Note: metadata API doesn't use X-Plex-Client-Identifier - causes 401
       const response = await axios.get(
-        'https://discover.provider.plex.tv/library/search',
+        'https://metadata.provider.plex.tv/library/metadata/matches',
         {
-          params: {
-            query: query,
-            searchTypes: searchType || 'movie,show',
-            limit: 10
-          },
+          params,
           headers: {
             'X-Plex-Token': this.token,
-            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
             'Accept': 'application/json'
           }
         }
       );
       return response.data.MediaContainer?.Metadata || [];
     } catch (error) {
-      console.error('[Plex] Error searching discover:', error.message);
+      console.error('[Plex] Error searching metadata:', error.message);
       return [];
+    }
+  }
+
+  /**
+   * Add item to user's Plex watchlist by searching Discover and adding
+   * This syncs items added via Flexerr to the user's actual Plex watchlist
+   */
+  async addToWatchlistBySearch(title, year, mediaType, imdbId = null) {
+    try {
+      const plexType = mediaType === 'tv' ? 'show' : 'movie';
+
+      // Search by title + year first (more reliable)
+      let searchQuery = `${title} ${year || ''}`.trim();
+      console.log(`[Plex] Searching Discover for: "${searchQuery}" (${plexType})`);
+
+      let results = await this.searchDiscover(searchQuery, mediaType);
+
+      // If no results with year, try without year
+      if ((!results || results.length === 0) && year) {
+        console.log(`[Plex] No results with year, trying title only: "${title}"`);
+        results = await this.searchDiscover(title, mediaType);
+      }
+
+      if (!results || results.length === 0) {
+        console.log(`[Plex] No results found for "${title}"`);
+        return { success: false, error: 'Not found on Plex Discover' };
+      }
+
+      // Find best match - prefer IMDB match, then exact title+year, then title only
+      let match = null;
+
+      // First try IMDB match (most reliable)
+      if (imdbId) {
+        match = results.find(r => {
+          if (r.Guid) {
+            const guids = Array.isArray(r.Guid) ? r.Guid : [];
+            return guids.some(g => g.id === `imdb://${imdbId}`);
+          }
+          return false;
+        });
+        if (match) {
+          console.log(`[Plex] Found by IMDB match: "${match.title}" (${match.year})`);
+        }
+      }
+
+      // Then try exact title+year match
+      if (!match) {
+        match = results.find(r => {
+          const titleMatch = r.title?.toLowerCase() === title?.toLowerCase();
+          const yearMatch = !year || r.year === parseInt(year);
+          return titleMatch && yearMatch;
+        });
+      }
+
+      // Then try title only (allow year mismatch)
+      if (!match) {
+        match = results.find(r => r.title?.toLowerCase() === title?.toLowerCase());
+        if (match) {
+          console.log(`[Plex] Found by title match (year differs): "${match.title}" (${match.year})`);
+        }
+      }
+
+      // Fallback to first result if no exact match
+      if (!match) {
+        match = results[0];
+        console.log(`[Plex] No exact match, using first result: "${match.title}" (${match.year})`);
+      }
+
+      if (!match.ratingKey) {
+        console.log('[Plex] Match found but no ratingKey:', match);
+        return { success: false, error: 'No ratingKey for match' };
+      }
+
+      console.log(`[Plex] Adding "${match.title}" (${match.year}) to watchlist, ratingKey: ${match.ratingKey}`);
+
+      // Add to watchlist using the ratingKey
+      const result = await this.addToPlexWatchlist(match.ratingKey);
+
+      if (result.success) {
+        console.log(`[Plex] Successfully added "${match.title}" to watchlist`);
+      }
+
+      return result;
+    } catch (error) {
+      console.error('[Plex] Error adding to watchlist by search:', error.message);
+      return { success: false, error: error.message };
     }
   }
 }
