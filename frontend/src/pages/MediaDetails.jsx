@@ -771,7 +771,7 @@ function StatsModal({ isOpen, onClose, tmdbId, mediaType, title, isProtected }) 
                     <ShieldCheck className="h-6 w-6 text-emerald-400" />
                     <div>
                       <h4 className="text-sm font-medium text-emerald-400">Protected from Deletion</h4>
-                      <p className="text-xs text-emerald-300/70">This item will be skipped by all cleanup rules and Smart Episode Manager</p>
+                      <p className="text-xs text-emerald-300/70">This item will be skipped by all cleanup rules and VIPER</p>
                     </div>
                   </div>
                 </div>

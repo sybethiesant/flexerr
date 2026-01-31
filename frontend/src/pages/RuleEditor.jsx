@@ -708,12 +708,12 @@ export default function RuleEditor() {
             </div>
           </div>
 
-          {/* Info box about Smart Episode Cleanup */}
+          {/* Info box about VIPER */}
           {['episodes', 'shows', 'seasons'].includes(rule.target_type) && (
             <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
               <p className="text-blue-300 text-sm">
                 <strong>Tip:</strong> For intelligent episode cleanup based on user watch progress,
-                enable the <strong>Smart Episode Manager</strong> in Settings instead of creating
+                enable <strong>VIPER</strong> in Settings instead of creating
                 episode-based rules. It automatically tracks each user's position and watch velocity.
               </p>
             </div>

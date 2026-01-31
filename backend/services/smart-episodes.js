@@ -1,7 +1,7 @@
 /**
- * Smart Episode Manager
+ * VIPER - Velocity-Informed Protection & Episode Removal
  *
- * Handles intelligent episode lifecycle management:
+ * Intelligent episode lifecycle management system:
  * 1. Tracks multi-user watch progress and velocity
  * 2. Determines safe deletion candidates based on ALL users' positions
  * 3. Proactively re-downloads episodes before slower viewers need them
@@ -33,7 +33,7 @@ function normalizeTitle(title) {
     .replace(/[^a-z0-9]/g, ''); // Remove all non-alphanumeric
 }
 
-class SmartEpisodeManager {
+class Viper {
   constructor() {
     this.plex = null;
     this.mediaServer = null;
@@ -110,7 +110,7 @@ class SmartEpisodeManager {
       this.mediaServer = plexService;
       this.mediaServerType = 'plex';
     } else {
-      console.error('[SmartEpisodeManager] Plex service not configured - required for smart cleanup');
+      console.error('[VIPER] Plex service not configured - required for smart cleanup');
     }
 
     this.sonarr = SonarrService.fromDb();
@@ -167,7 +167,7 @@ class SmartEpisodeManager {
     try {
       transaction(episodes);
     } catch (e) {
-      console.error('[SmartCleanup] Error persisting episode stats:', e.message);
+      console.error('[VIPER] Error persisting episode stats:', e.message);
     }
   }
 
@@ -184,7 +184,7 @@ class SmartEpisodeManager {
         WHERE show_rating_key = ? AND season_number = ? AND episode_number = ?
       `).run(byCleanup ? 1 : 0, showRatingKey, seasonNumber, episodeNumber);
     } catch (e) {
-      console.error('[SmartCleanup] Error marking episode deleted:', e.message);
+      console.error('[VIPER] Error marking episode deleted:', e.message);
     }
   }
 
@@ -199,7 +199,7 @@ class SmartEpisodeManager {
         ORDER BY season_number, episode_number
       `).all(showRatingKey);
     } catch (e) {
-      console.error('[SmartCleanup] Error getting episode stats:', e.message);
+      console.error('[VIPER] Error getting episode stats:', e.message);
       return [];
     }
   }
@@ -215,7 +215,7 @@ class SmartEpisodeManager {
         ORDER BY season_number, episode_number
       `).all(showTitle);
     } catch (e) {
-      console.error('[SmartCleanup] Error getting episode stats by title:', e.message);
+      console.error('[VIPER] Error getting episode stats by title:', e.message);
       return [];
     }
   }
@@ -293,7 +293,7 @@ class SmartEpisodeManager {
       // Combine and return both
       return [...plexVelocities, ...jellyfinVelocities];
     } catch (e) {
-      console.error('[SmartCleanup] Error getting active velocities:', e.message);
+      console.error('[VIPER] Error getting active velocities:', e.message);
       return [];
     }
   }
@@ -358,7 +358,7 @@ class SmartEpisodeManager {
       return Array.from(showsMap.values())
         .sort((a, b) => new Date(b.last_activity) - new Date(a.last_activity));
     } catch (e) {
-      console.error('[SmartCleanup] Error getting shows with active viewers:', e.message);
+      console.error('[VIPER] Error getting shows with active viewers:', e.message);
       return [];
     }
   }
@@ -482,7 +482,7 @@ class SmartEpisodeManager {
         };
       });
     } catch (e) {
-      console.error('[SmartCleanup] Error getting user buffer zones:', e.message);
+      console.error('[VIPER] Error getting user buffer zones:', e.message);
       return [];
     }
   }
@@ -613,7 +613,7 @@ class SmartEpisodeManager {
       // Method 2: If no lifecycle entry, try to find by title in requests/watchlist
       // This handles shows that don't have a lifecycle entry yet
       if (!tmdbId && showInfo?.title) {
-        console.log(`[SmartCleanup] No lifecycle entry for ratingKey ${showRatingKey}, searching by title: "${showInfo.title}"`);
+        console.log(`[VIPER] No lifecycle entry for ratingKey ${showRatingKey}, searching by title: "${showInfo.title}"`);
 
         const normalizedPlexTitle = normalizeTitle(showInfo.title);
 
@@ -628,7 +628,7 @@ class SmartEpisodeManager {
 
         if (watchlistByTitle?.tmdb_id) {
           tmdbId = watchlistByTitle.tmdb_id;
-          console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via watchlist exact title match`);
+          console.log(`[VIPER] Found tmdb_id ${tmdbId} via watchlist exact title match`);
         } else {
           // Fuzzy match: Get all TV watchlist entries and compare normalized titles
           const allWatchlistTitles = db.prepare(`
@@ -639,7 +639,7 @@ class SmartEpisodeManager {
           for (const entry of allWatchlistTitles) {
             if (normalizeTitle(entry.title) === normalizedPlexTitle) {
               tmdbId = entry.tmdb_id;
-              console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via watchlist fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
+              console.log(`[VIPER] Found tmdb_id ${tmdbId} via watchlist fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
               break;
             }
           }
@@ -656,7 +656,7 @@ class SmartEpisodeManager {
 
           if (requestByTitle?.tmdb_id) {
             tmdbId = requestByTitle.tmdb_id;
-            console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via requests exact title match`);
+            console.log(`[VIPER] Found tmdb_id ${tmdbId} via requests exact title match`);
           } else {
             // Fuzzy match requests too
             const allRequestTitles = db.prepare(`
@@ -667,7 +667,7 @@ class SmartEpisodeManager {
             for (const entry of allRequestTitles) {
               if (normalizeTitle(entry.title) === normalizedPlexTitle) {
                 tmdbId = entry.tmdb_id;
-                console.log(`[SmartCleanup] Found tmdb_id ${tmdbId} via requests fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
+                console.log(`[VIPER] Found tmdb_id ${tmdbId} via requests fuzzy match: "${showInfo.title}" ≈ "${entry.title}"`);
                 break;
               }
             }
@@ -690,7 +690,7 @@ class SmartEpisodeManager {
             ORDER BY w.added_at DESC
           `).all(tmdbId);
         } catch (sqlErr) {
-          console.error('[SmartCleanup] SQL error getting watchlist users:', sqlErr.message);
+          console.error('[VIPER] SQL error getting watchlist users:', sqlErr.message);
           // If SQL fails, protect the show (fail safe)
           return true;
         }
@@ -725,16 +725,16 @@ class SmartEpisodeManager {
             // User has started watching - velocity-based cleanup can proceed
             // Log differently based on grace period
             if (isWithinGracePeriod) {
-              console.log(`[SmartCleanup] User ${entry.username} is ACTIVELY WATCHING show (position: ${userVelocity.current_position}, ${userVelocity.episodes_per_day?.toFixed(2) || 0} eps/day) - added ${Math.round(entry.days_since_added)} days ago - velocity cleanup can proceed`);
+              console.log(`[VIPER] User ${entry.username} is ACTIVELY WATCHING show (position: ${userVelocity.current_position}, ${userVelocity.episodes_per_day?.toFixed(2) || 0} eps/day) - added ${Math.round(entry.days_since_added)} days ago - velocity cleanup can proceed`);
             } else {
-              console.log(`[SmartCleanup] User ${entry.username} has velocity data for show (position: ${userVelocity.current_position}) - not protecting based on watchlist`);
+              console.log(`[VIPER] User ${entry.username} has velocity data for show (position: ${userVelocity.current_position}) - not protecting based on watchlist`);
             }
           } else {
             // User hasn't started watching yet - protect all episodes
             if (isWithinGracePeriod) {
-              console.log(`[SmartCleanup] Grace period ACTIVE for show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}) - user ${entry.username} added ${Math.round(entry.days_since_added)} days ago and hasn't started watching yet`);
+              console.log(`[VIPER] Grace period ACTIVE for show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}) - user ${entry.username} added ${Math.round(entry.days_since_added)} days ago and hasn't started watching yet`);
             } else {
-              console.log(`[SmartCleanup] PROTECTING show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}, title: "${entry.title}") - user ${entry.username} has it watchlisted but hasn't started watching yet (added ${Math.round(entry.days_since_added)} days ago)`);
+              console.log(`[VIPER] PROTECTING show (ratingKey: ${showRatingKey}, tmdb: ${tmdbId}, title: "${entry.title}") - user ${entry.username} has it watchlisted but hasn't started watching yet (added ${Math.round(entry.days_since_added)} days ago)`);
             }
             return true;
           }
@@ -742,10 +742,10 @@ class SmartEpisodeManager {
 
         // If we reach here, all watchlisted users have started watching
         if (allWatchlistUsers.length > 0) {
-          console.log(`[SmartCleanup] All ${allWatchlistUsers.length} watchlisted user(s) have started watching show (ratingKey: ${showRatingKey}) - velocity cleanup can proceed`);
+          console.log(`[VIPER] All ${allWatchlistUsers.length} watchlisted user(s) have started watching show (ratingKey: ${showRatingKey}) - velocity cleanup can proceed`);
         }
       } else {
-        console.log(`[SmartCleanup] No tmdb_id found for show (ratingKey: ${showRatingKey}, title: "${showInfo?.title || 'unknown'}") - cannot check watchlist`);
+        console.log(`[VIPER] No tmdb_id found for show (ratingKey: ${showRatingKey}, title: "${showInfo?.title || 'unknown'}") - cannot check watchlist`);
       }
 
       // Method 3: Check requests table for any pending/processing requests by tmdb_id OR title
@@ -790,7 +790,7 @@ class SmartEpisodeManager {
           WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
         `).get(pendingRequest.username, showRatingKey);
 
-        console.log(`[SmartCleanup DEBUG] First query for ${pendingRequest.username}: ratingKey=${showRatingKey}, found=${!!requesterVelocity}`);
+        console.log(`[VIPER DEBUG] First query for ${pendingRequest.username}: ratingKey=${showRatingKey}, found=${!!requesterVelocity}`);
 
         // If not found, try by title hash
         if (!requesterVelocity && pendingRequest.title) {
@@ -800,27 +800,27 @@ class SmartEpisodeManager {
             hash = hash & hash;
           }
           const titleHash = Math.abs(hash).toString();
-          console.log(`[SmartCleanup DEBUG] Fallback query: title="${pendingRequest.title}", hash=${titleHash}`);
+          console.log(`[VIPER DEBUG] Fallback query: title="${pendingRequest.title}", hash=${titleHash}`);
           requesterVelocity = db.prepare(`
             SELECT * FROM user_velocity
             WHERE user_id = (SELECT id FROM users WHERE username = ?) AND tmdb_id = ?
           `).get(pendingRequest.username, titleHash);
-          console.log(`[SmartCleanup DEBUG] Fallback result: found=${!!requesterVelocity}, position=${requesterVelocity?.current_position}`);
+          console.log(`[VIPER DEBUG] Fallback result: found=${!!requesterVelocity}, position=${requesterVelocity?.current_position}`);
         }
 
         if (!requesterVelocity || !requesterVelocity.current_position || requesterVelocity.current_position === 0) {
-          console.log(`[SmartCleanup] PROTECTING show via request (ratingKey: ${showRatingKey}, title: "${pendingRequest.title}") - requested by ${pendingRequest.username} who hasn't started watching`);
+          console.log(`[VIPER] PROTECTING show via request (ratingKey: ${showRatingKey}, title: "${pendingRequest.title}") - requested by ${pendingRequest.username} who hasn't started watching`);
           return true;
         } else {
-          console.log(`[SmartCleanup] Requester ${pendingRequest.username} is ACTIVELY WATCHING "${pendingRequest.title}" (position: ${requesterVelocity.current_position}) - velocity cleanup can proceed`);
+          console.log(`[VIPER] Requester ${pendingRequest.username} is ACTIVELY WATCHING "${pendingRequest.title}" (position: ${requesterVelocity.current_position}) - velocity cleanup can proceed`);
         }
       }
 
       return false;
     } catch (err) {
-      console.error('[SmartCleanup] Error checking watchlist grace period:', err.message);
-      console.error('[SmartCleanup] Error stack:', err.stack);
-      console.error('[SmartCleanup] Show ratingKey:', showRatingKey, 'Title:', showInfo?.title);
+      console.error('[VIPER] Error checking watchlist grace period:', err.message);
+      console.error('[VIPER] Error stack:', err.stack);
+      console.error('[VIPER] Show ratingKey:', showRatingKey, 'Title:', showInfo?.title);
       // On error, PROTECT the show (fail safe) - don't delete if we can't verify
       return true;
     }
@@ -837,7 +837,7 @@ class SmartEpisodeManager {
 
     // Debug: log episode count from Plex
     if (analysis.episodes.length === 0) {
-      console.log(`[SmartCleanup] Plex returned 0 episodes for show ${showRatingKey} (${analysis.show?.title})`);
+      console.log(`[VIPER] Plex returned 0 episodes for show ${showRatingKey} (${analysis.show?.title})`);
     }
 
     const { episodes, userProgress } = analysis;
@@ -1225,7 +1225,7 @@ class SmartEpisodeManager {
             });
           }
         } catch (err) {
-          console.error(`[SmartEpisodes] Error analyzing ${show.title}:`, err.message);
+          console.error(`[VIPER] Error analyzing ${show.title}:`, err.message);
         }
       }
     }
@@ -1325,7 +1325,7 @@ class SmartEpisodeManager {
       await this.sonarr.monitorEpisode(episode.id, true);
       await this.sonarr.searchEpisode(episode.id);
 
-      log('info', 'smart-episodes', 'Triggered proactive re-download', {
+      log('info', 'viper', 'Triggered proactive re-download', {
         media_title: `${showTitle} S${seasonNumber}E${episodeNumber}`,
         media_type: 'episode'
       });
@@ -1449,7 +1449,7 @@ class SmartEpisodeManager {
       return { enabled: false, changes: [] };
     }
 
-    console.log('[SmartEpisodes] Running velocity change detection...');
+    console.log('[VIPER] Running velocity change detection...');
     const changes = [];
 
     const libraries = await this.plex.getLibraries();
@@ -1489,7 +1489,7 @@ class SmartEpisodeManager {
 
                 changes.push(change);
 
-                log('info', 'smart-episodes', `Velocity change detected: ${show.title}`, {
+                log('info', 'viper', `Velocity change detected: ${show.title}`, {
                   media_title: show.title,
                   details: JSON.stringify({
                     user: user.accountId,
@@ -1505,7 +1505,7 @@ class SmartEpisodeManager {
             this.storeVelocitySnapshot(user.accountId, show.ratingKey, user.velocity, user.currentPosition);
           }
         } catch (err) {
-          console.error(`[SmartEpisodes] Error checking velocity for ${show.title}:`, err.message);
+          console.error(`[VIPER] Error checking velocity for ${show.title}:`, err.message);
         }
       }
     }
@@ -1591,7 +1591,7 @@ class SmartEpisodeManager {
       return { enabled: false, emergencies: [] };
     }
 
-    console.log('[SmartEpisodes] Checking for emergency redownloads...');
+    console.log('[VIPER] Checking for emergency redownloads...');
     const emergencies = [];
     const emergencyHours = settings.emergencyBufferHours;
 
@@ -1651,7 +1651,7 @@ class SmartEpisodeManager {
     const results = [];
 
     for (const emergency of emergencies) {
-      console.log(`[SmartEpisodes] EMERGENCY: User needs ${emergency.show} S${emergency.seasonNumber}E${emergency.episodeNumber} in ${emergency.hoursUntilNeeded} hours!`);
+      console.log(`[VIPER] EMERGENCY: User needs ${emergency.show} S${emergency.seasonNumber}E${emergency.episodeNumber} in ${emergency.hoursUntilNeeded} hours!`);
 
       const result = await this.triggerRedownload(
         emergency.show,
@@ -1665,7 +1665,7 @@ class SmartEpisodeManager {
         ...result
       });
 
-      log('warn', 'smart-episodes', 'Emergency re-download triggered', {
+      log('warn', 'viper', 'Emergency re-download triggered', {
         media_title: `${emergency.show} S${emergency.seasonNumber}E${emergency.episodeNumber}`,
         details: JSON.stringify({
           hoursUntilNeeded: emergency.hoursUntilNeeded,
@@ -1686,7 +1686,7 @@ class SmartEpisodeManager {
    * Called by scheduler at configured intervals
    */
   async runBackgroundChecks() {
-    console.log('[SmartEpisodes] Running background checks...');
+    console.log('[VIPER] Running background checks...');
 
     const results = {
       timestamp: new Date(),
@@ -1698,27 +1698,27 @@ class SmartEpisodeManager {
     try {
       // 1. Check for velocity changes
       results.velocityCheck = await this.handleVelocityChanges();
-      console.log(`[SmartEpisodes] Velocity check: ${results.velocityCheck.changesDetected || 0} changes detected`);
+      console.log(`[VIPER] Velocity check: ${results.velocityCheck.changesDetected || 0} changes detected`);
     } catch (err) {
-      console.error('[SmartEpisodes] Velocity check failed:', err.message);
+      console.error('[VIPER] Velocity check failed:', err.message);
       results.velocityCheck = { error: err.message };
     }
 
     try {
       // 2. Check for emergency redownloads
       results.emergencyCheck = await this.runEmergencyRedownloads();
-      console.log(`[SmartEpisodes] Emergency check: ${results.emergencyCheck.processed || 0} emergencies handled`);
+      console.log(`[VIPER] Emergency check: ${results.emergencyCheck.processed || 0} emergencies handled`);
     } catch (err) {
-      console.error('[SmartEpisodes] Emergency check failed:', err.message);
+      console.error('[VIPER] Emergency check failed:', err.message);
       results.emergencyCheck = { error: err.message };
     }
 
     try {
       // 3. Run standard proactive redownloads
       results.redownloadCheck = await this.runProactiveRedownloads();
-      console.log(`[SmartEpisodes] Redownload check: ${results.redownloadCheck.processed || 0} episodes queued`);
+      console.log(`[VIPER] Redownload check: ${results.redownloadCheck.processed || 0} episodes queued`);
     } catch (err) {
-      console.error('[SmartEpisodes] Redownload check failed:', err.message);
+      console.error('[VIPER] Redownload check failed:', err.message);
       results.redownloadCheck = { error: err.message };
     }
 
@@ -1745,7 +1745,7 @@ class SmartEpisodeManager {
       return { enabled: false, message: 'Smart cleanup is disabled' };
     }
 
-    console.log(`[SmartCleanup] Running velocity-based cleanup (dryRun: ${dryRun})...`);
+    console.log(`[VIPER] Running velocity-based cleanup (dryRun: ${dryRun})...`);
 
     const results = {
       timestamp: new Date(),
@@ -1768,21 +1768,21 @@ class SmartEpisodeManager {
     try {
       // Get shows with active viewers using synced data
       const activeShows = this.getShowsWithActiveViewers(settings.activeViewerDays);
-      console.log(`[SmartCleanup] Found ${activeShows.length} shows with active viewers`);
+      console.log(`[VIPER] Found ${activeShows.length} shows with active viewers`);
 
       // Get all show libraries
       const libraries = await this.plex.getLibraries();
-      console.log(`[SmartCleanup] Found ${libraries.length} libraries: ${libraries.map(l => `${l.title}(${l.type})`).join(', ')}`);
+      console.log(`[VIPER] Found ${libraries.length} libraries: ${libraries.map(l => `${l.title}(${l.type})`).join(', ')}`);
       const showLibraries = libraries.filter(l => l.type === 'show');
-      console.log(`[SmartCleanup] Processing ${showLibraries.length} show libraries`);
+      console.log(`[VIPER] Processing ${showLibraries.length} show libraries`);
 
       if (showLibraries.length === 0) {
-        console.log('[SmartCleanup] WARNING: No show libraries found! Check Plex library types.');
+        console.log('[VIPER] WARNING: No show libraries found! Check Plex library types.');
       }
 
       for (const library of showLibraries) {
         const shows = await this.plex.getLibraryContents(library.id);
-        console.log(`[SmartCleanup] Library "${library.title}" has ${shows.length} shows`);
+        console.log(`[VIPER] Library "${library.title}" has ${shows.length} shows`);
 
         for (const show of shows) {
           try {
@@ -1795,7 +1795,7 @@ class SmartEpisodeManager {
             // Analyze the show
             const analysis = await this.analyzeShow(show.ratingKey);
             if (!analysis || !analysis.episodes) {
-              console.log(`[SmartCleanup] Show "${show.title}" returned null analysis`);
+              console.log(`[VIPER] Show "${show.title}" returned null analysis`);
               continue;
             }
 
@@ -1804,11 +1804,11 @@ class SmartEpisodeManager {
             results.episodesAnalyzed += episodeCount;
 
             if (episodeCount === 0) {
-              console.log(`[SmartCleanup] Show "${show.title}" has 0 episodes (empty array)`);
+              console.log(`[VIPER] Show "${show.title}" has 0 episodes (empty array)`);
               continue; // Skip shows with no episodes
             }
 
-            console.log(`[SmartCleanup] Analyzing ${episodeCount} episodes for "${show.title}"`);
+            console.log(`[VIPER] Analyzing ${episodeCount} episodes for "${show.title}"`);
 
             // Find deletion candidates
             for (const episode of analysis.episodes) {
@@ -1851,14 +1851,14 @@ class SmartEpisodeManager {
                         deletedAt: new Date()
                       });
                     } else {
-                      console.error(`[SmartCleanup] Deletion failed for ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteResult.error);
+                      console.error(`[VIPER] Deletion failed for ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteResult.error);
                       results.errors.push({
                         ...candidate,
                         error: deleteResult.error
                       });
                     }
                   } catch (deleteErr) {
-                    console.error(`[SmartCleanup] Exception during deletion of ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteErr.message);
+                    console.error(`[VIPER] Exception during deletion of ${show.title} S${episode.seasonNumber}E${episode.episodeNumber}:`, deleteErr.message);
                     results.errors.push({
                       ...candidate,
                       error: deleteErr.message
@@ -1876,8 +1876,8 @@ class SmartEpisodeManager {
               }
             }
           } catch (showErr) {
-            console.error(`[SmartCleanup] Error analyzing show "${show.title}":`, showErr.message);
-            console.error(`[SmartCleanup] Stack trace:`, showErr.stack);
+            console.error(`[VIPER] Error analyzing show "${show.title}":`, showErr.message);
+            console.error(`[VIPER] Stack trace:`, showErr.stack);
             results.errors.push({
               showTitle: show.title,
               showRatingKey: show.ratingKey,
@@ -1889,7 +1889,7 @@ class SmartEpisodeManager {
       }
 
       const successfulShows = results.showsAnalyzed - results.errors.length;
-      console.log(`[SmartCleanup] Analysis complete:`, {
+      console.log(`[VIPER] Analysis complete:`, {
         showsAnalyzed: results.showsAnalyzed,
         successfulShows: successfulShows,
         failedShows: results.errors.length,
@@ -1900,7 +1900,7 @@ class SmartEpisodeManager {
       });
 
       if (results.errors.length > 0) {
-        console.log(`[SmartCleanup] Shows with errors:`);
+        console.log(`[VIPER] Shows with errors:`);
         results.errors.forEach(err => {
           console.log(`  - ${err.showTitle} (${err.showRatingKey}): ${err.error}`);
         });
@@ -1941,14 +1941,14 @@ class SmartEpisodeManager {
               deleted: results.deleted.length
             }
           });
-          console.log(`[SmartCleanup] Discord notification sent for ${results.deleted.length} deletions`);
+          console.log(`[VIPER] Discord notification sent for ${results.deleted.length} deletions`);
         } catch (notifyErr) {
-          console.error('[SmartCleanup] Failed to send notification:', notifyErr.message);
+          console.error('[VIPER] Failed to send notification:', notifyErr.message);
         }
       }
 
     } catch (err) {
-      console.error('[SmartCleanup] Error:', err.message);
+      console.error('[VIPER] Error:', err.message);
       results.errors.push({ error: err.message });
     }
 
@@ -1973,9 +1973,9 @@ class SmartEpisodeManager {
       try {
         await this.plex.deleteItem(ratingKey);
         results.plexDeleted = true;
-        console.log(`[SmartCleanup] Deleted from Plex: ${showTitle} S${seasonNumber}E${episodeNumber}`);
+        console.log(`[VIPER] Deleted from Plex: ${showTitle} S${seasonNumber}E${episodeNumber}`);
       } catch (plexErr) {
-        console.error(`[SmartCleanup] Plex delete failed: ${plexErr.message}`);
+        console.error(`[VIPER] Plex delete failed: ${plexErr.message}`);
         results.error = `Plex: ${plexErr.message}`;
       }
 
@@ -1999,16 +1999,16 @@ class SmartEpisodeManager {
                 // Delete the episode file from Sonarr
                 await this.sonarr.deleteEpisodeFile(sonarrEp.episodeFileId);
                 results.sonarrDeleted = true;
-                console.log(`[SmartCleanup] Deleted from Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
+                console.log(`[VIPER] Deleted from Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
               }
 
               // ALWAYS unmonitor after deletion to prevent automatic re-download
               await this.sonarr.monitorEpisode(sonarrEp.id, false);
-              console.log(`[SmartCleanup] Unmonitored in Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
+              console.log(`[VIPER] Unmonitored in Sonarr: ${showTitle} S${seasonNumber}E${episodeNumber}`);
             }
           }
         } catch (sonarrErr) {
-          console.error(`[SmartCleanup] Sonarr operation failed: ${sonarrErr.message}`);
+          console.error(`[VIPER] Sonarr operation failed: ${sonarrErr.message}`);
           if (!results.error) results.error = `Sonarr: ${sonarrErr.message}`;
         }
       }
@@ -2101,7 +2101,7 @@ class SmartEpisodeManager {
     if (!this.plex) return { error: 'Plex not configured' };
 
     const settings = this.getSettings();
-    console.log(`[SmartCleanup] Running movie cleanup (dryRun: ${dryRun})...`);
+    console.log(`[VIPER] Running movie cleanup (dryRun: ${dryRun})...`);
 
     const results = {
       timestamp: new Date(),
@@ -2212,7 +2212,7 @@ class SmartEpisodeManager {
                       await this.radarr.deleteMovie(match.id, true); // deleteFiles=true
                     }
                   } catch (radarrErr) {
-                    console.error(`[SmartCleanup] Radarr delete failed: ${radarrErr.message}`);
+                    console.error(`[VIPER] Radarr delete failed: ${radarrErr.message}`);
                   }
                 }
 
@@ -2237,7 +2237,7 @@ class SmartEpisodeManager {
         }
       }
 
-      console.log(`[SmartCleanup] Movie cleanup complete:`, {
+      console.log(`[VIPER] Movie cleanup complete:`, {
         analyzed: results.moviesAnalyzed,
         candidates: results.deletionCandidates.length,
         deleted: results.deleted.length
@@ -2258,9 +2258,9 @@ class SmartEpisodeManager {
               deleted: results.deleted.length
             }
           });
-          console.log(`[SmartCleanup] Discord notification sent for ${results.deleted.length} movie deletions`);
+          console.log(`[VIPER] Discord notification sent for ${results.deleted.length} movie deletions`);
         } catch (notifyErr) {
-          console.error('[SmartCleanup] Failed to send movie notification:', notifyErr.message);
+          console.error('[VIPER] Failed to send movie notification:', notifyErr.message);
         }
       }
 
@@ -2272,4 +2272,4 @@ class SmartEpisodeManager {
   }
 }
 
-module.exports = SmartEpisodeManager;
+module.exports = Viper;

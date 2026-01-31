@@ -136,7 +136,7 @@ export const HELP_CONTENT = {
     example: 'Enable to free disk space, disable to keep files as backup'
   },
 
-  // === SMART CLEANUP SETTINGS ===
+  // === VIPER SETTINGS ===
   velocityMonitoring: {
     title: 'Velocity Monitoring',
     content: 'Tracks how fast each user watches episodes to detect binge sessions. When someone starts watching faster than usual, the system can proactively prepare content they\'ll need soon.',
@@ -209,7 +209,7 @@ export const HELP_CONTENT = {
   },
   includeSpecials: {
     title: 'Include Specials',
-    content: 'Whether to apply smart cleanup rules to Season 0 (Specials). Some users want specials cleaned up like regular episodes, others want them kept indefinitely.',
+    content: 'Whether to apply VIPER cleanup rules to Season 0 (Specials). Some users want specials cleaned up like regular episodes, others want them kept indefinitely.',
     example: 'Enable to clean up watched specials, disable to keep all specials'
   },
 

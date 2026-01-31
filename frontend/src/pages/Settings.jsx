@@ -4,9 +4,13 @@ import {
   Settings, Clock, Film, RefreshCw, Calendar,
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
   ChevronDown, ChevronUp, HardDrive, Zap, Video, Play,
-  CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink
+  CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink,
+  Search, X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// Default provider IDs for discover filter (popular US streaming services)
+const DEFAULT_PROVIDER_IDS = [8, 9, 337, 1899, 15, 386, 350, 2303, 283];
 
 function SettingSection({ title, icon: Icon, children, collapsible = false, defaultOpen = true }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -510,10 +514,95 @@ export default function SettingsPage() {
   const [editingService, setEditingService] = useState(null);
   const [addingService, setAddingService] = useState(false);
 
+  // Discover providers state
+  const [enabledProviders, setEnabledProviders] = useState(DEFAULT_PROVIDER_IDS);
+  const [allProviders, setAllProviders] = useState([]);
+  const [loadingProviders, setLoadingProviders] = useState(false);
+  const [providerSearch, setProviderSearch] = useState('');
+
   useEffect(() => {
     fetchSettings();
     fetchServices();
   }, []);
+
+  // Fetch all available streaming providers from TMDB
+  const fetchAllProviders = async () => {
+    setLoadingProviders(true);
+    try {
+      // Fetch both movie and TV providers to get the complete list
+      const [movieRes, tvRes] = await Promise.all([
+        api.get('/discover/providers', { params: { type: 'movie', region: 'US' } }),
+        api.get('/discover/providers', { params: { type: 'tv', region: 'US' } })
+      ]);
+
+      // Merge and dedupe providers by ID first
+      const byId = new Map();
+      [...(movieRes.data.providers || []), ...(tvRes.data.providers || [])].forEach(p => {
+        if (!byId.has(p.id)) {
+          byId.set(p.id, p);
+        }
+      });
+
+      // Extract brand name for grouping (e.g., "Amazon Prime Video" -> "amazon")
+      const getBrand = (name) => {
+        const lower = name.toLowerCase().trim();
+        // Common brand patterns to extract
+        const brandPatterns = [
+          /^(amazon)/i, /^(amc)/i, /^(apple)/i, /^(bet)/i, /^(britbox)/i,
+          /^(cbs)/i, /^(comedy)/i, /^(criterion)/i, /^(crunchyroll)/i,
+          /^(curiosity)/i, /^(discovery)/i, /^(disney)/i, /^(doc)/i,
+          /^(epix)/i, /^(espn)/i, /^(fandango)/i, /^(fox)/i, /^(fubi)/i,
+          /^(fxnow)/i, /^(google)/i, /^(hallmark)/i, /^(hbo)/i, /^(history)/i,
+          /^(hulu)/i, /^(itv)/i, /^(kanopy)/i, /^(lifetime)/i, /^(max)/i,
+          /^(mgm)/i, /^(mubi)/i, /^(nbc)/i, /^(netflix)/i, /^(nick)/i,
+          /^(paramount)/i, /^(pbs)/i, /^(peacock)/i, /^(pluto)/i, /^(plex)/i,
+          /^(roku)/i, /^(shudder)/i, /^(showtime)/i, /^(starz)/i, /^(sundance)/i,
+          /^(tnt)/i, /^(tubi)/i, /^(vudu)/i, /^(youtube)/i
+        ];
+        for (const pattern of brandPatterns) {
+          const match = lower.match(pattern);
+          if (match) return match[1].toLowerCase();
+        }
+        // Default: use first word
+        return lower.split(/[\s+]/)[0].replace(/[^a-z0-9]/g, '');
+      };
+
+      // Group by brand and keep the one with best display_priority
+      const byBrand = new Map();
+      Array.from(byId.values()).forEach(p => {
+        const brand = getBrand(p.name);
+        const existing = byBrand.get(brand);
+        if (!existing || (p.display_priority || 999) < (existing.display_priority || 999)) {
+          byBrand.set(brand, p);
+        }
+      });
+
+      // Sort by display_priority (most popular first)
+      const merged = Array.from(byBrand.values()).sort((a, b) =>
+        (a.display_priority || 999) - (b.display_priority || 999)
+      );
+      setAllProviders(merged);
+    } catch (err) {
+      console.error('Failed to load providers:', err);
+      toast.error('Failed to load streaming providers');
+    } finally {
+      setLoadingProviders(false);
+    }
+  };
+
+  // Parse enabled providers from settings when settings load
+  useEffect(() => {
+    if (settings.discover_providers) {
+      try {
+        const parsed = JSON.parse(settings.discover_providers);
+        if (Array.isArray(parsed)) {
+          setEnabledProviders(parsed);
+        }
+      } catch (e) {
+        // Use defaults
+      }
+    }
+  }, [settings.discover_providers]);
 
   const fetchSettings = async () => {
     try {
@@ -592,7 +681,7 @@ export default function SettingsPage() {
       }
 
       if (res.data.episodes?.enabled === false) {
-        toast.error('Smart Episode Manager is disabled. Enable it in settings first.');
+        toast.error('VIPER is disabled. Enable it in settings first.');
         return;
       }
 
@@ -678,6 +767,39 @@ export default function SettingsPage() {
   const getInt = (key, defaultVal = 0) => parseInt(settings[key]) || defaultVal;
   const getFloat = (key, defaultVal = 0) => parseFloat(settings[key]) || defaultVal;
   const getStr = (key, defaultVal = '') => settings[key] || defaultVal;
+
+  // Toggle a provider in the enabled list
+  const toggleProvider = (providerId) => {
+    const newEnabled = enabledProviders.includes(providerId)
+      ? enabledProviders.filter(id => id !== providerId)
+      : [...enabledProviders, providerId];
+    setEnabledProviders(newEnabled);
+    updateSetting('discover_providers', JSON.stringify(newEnabled));
+  };
+
+  // Select all visible providers
+  const selectAllProviders = () => {
+    const filtered = getFilteredProviders();
+    const newEnabled = [...new Set([...enabledProviders, ...filtered.map(p => p.id)])];
+    setEnabledProviders(newEnabled);
+    updateSetting('discover_providers', JSON.stringify(newEnabled));
+  };
+
+  // Deselect all visible providers
+  const deselectAllProviders = () => {
+    const filtered = getFilteredProviders();
+    const filterIds = new Set(filtered.map(p => p.id));
+    const newEnabled = enabledProviders.filter(id => !filterIds.has(id));
+    setEnabledProviders(newEnabled);
+    updateSetting('discover_providers', JSON.stringify(newEnabled));
+  };
+
+  // Get filtered providers based on search
+  const getFilteredProviders = () => {
+    if (!providerSearch.trim()) return allProviders;
+    const search = providerSearch.toLowerCase();
+    return allProviders.filter(p => p.name.toLowerCase().includes(search));
+  };
 
   // Get media server type
   const mediaServerType = getStr('media_server_type', 'plex');
@@ -860,24 +982,182 @@ export default function SettingsPage() {
         </SettingRow>
       </SettingSection>
 
-      {/* Smart Episode Manager - Consolidated Section */}
-      <SettingSection title="Smart Episode Manager" icon={Zap}>
+      {/* Discover Providers */}
+      <SettingSection title="Discover Providers" icon={Search}>
         <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
           <p className="text-blue-300 text-sm">
-            <strong>Smart Episode Manager</strong> intelligently manages TV show episodes based on each user's
+            Select which streaming providers appear in the Discover page filter.
+            Users can filter content by one provider at a time.
+          </p>
+        </div>
+
+        {/* Load providers button or search/controls */}
+        {allProviders.length === 0 ? (
+          <div className="text-center py-8">
+            <button
+              onClick={fetchAllProviders}
+              disabled={loadingProviders}
+              className="btn btn-primary flex items-center gap-2 mx-auto"
+            >
+              {loadingProviders ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="h-4 w-4" />
+              )}
+              {loadingProviders ? 'Loading Providers...' : 'Load All Available Providers'}
+            </button>
+            <p className="text-sm text-slate-400 mt-3">
+              Click to fetch all streaming providers from TMDB
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Search and controls */}
+            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={providerSearch}
+                  onChange={(e) => setProviderSearch(e.target.value)}
+                  placeholder="Search providers..."
+                  className="w-full pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                {providerSearch && (
+                  <button
+                    onClick={() => setProviderSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={selectAllProviders}
+                  className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={deselectAllProviders}
+                  className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  Deselect All
+                </button>
+                <button
+                  onClick={fetchAllProviders}
+                  disabled={loadingProviders}
+                  className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                  title="Refresh providers"
+                >
+                  <RefreshCw className={`h-4 w-4 ${loadingProviders ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Stats bar */}
+            <div className="flex items-center justify-between mb-4 px-1">
+              <span className="text-sm text-slate-400">
+                {getFilteredProviders().length} provider{getFilteredProviders().length !== 1 ? 's' : ''}
+                {providerSearch && ` matching "${providerSearch}"`}
+              </span>
+              <span className="text-sm font-medium text-primary-400">
+                {enabledProviders.length} enabled
+              </span>
+            </div>
+
+            {/* Provider grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-96 overflow-y-auto pr-1">
+              {getFilteredProviders().map(provider => {
+                const isEnabled = enabledProviders.includes(provider.id);
+                return (
+                  <button
+                    key={provider.id}
+                    onClick={() => toggleProvider(provider.id)}
+                    className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left ${
+                      isEnabled
+                        ? 'bg-gradient-to-br from-primary-500/20 to-blue-500/20 ring-2 ring-primary-400/50 shadow-lg shadow-primary-500/10'
+                        : 'bg-slate-700/40 hover:bg-slate-600/50 border border-slate-600/50'
+                    }`}
+                  >
+                    <div className={`w-10 h-10 rounded-lg overflow-hidden bg-white flex-shrink-0 flex items-center justify-center shadow-md ${
+                      isEnabled ? 'ring-2 ring-white/30' : ''
+                    }`}>
+                      {provider.logo_path ? (
+                        <img
+                          src={provider.logo_path}
+                          alt={provider.name}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span className="text-xs text-slate-500 font-bold">
+                          {provider.name.slice(0, 2).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className={`text-sm font-medium truncate block ${
+                        isEnabled ? 'text-white' : 'text-slate-300'
+                      }`}>
+                        {provider.name}
+                      </span>
+                      {isEnabled && (
+                        <span className="text-xs text-primary-400">Enabled</span>
+                      )}
+                    </div>
+                    <div className={`w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center ${
+                      isEnabled ? 'bg-primary-500' : 'bg-slate-600'
+                    }`}>
+                      {isEnabled && (
+                        <CheckCircle className="w-3 h-3 text-white" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {getFilteredProviders().length === 0 && providerSearch && (
+              <div className="text-center py-8 text-slate-400">
+                <p>No providers match "{providerSearch}"</p>
+                <button
+                  onClick={() => setProviderSearch('')}
+                  className="text-primary-400 hover:text-primary-300 text-sm mt-2"
+                >
+                  Clear search
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {enabledProviders.length === 0 && allProviders.length > 0 && (
+          <p className="text-sm text-amber-400 mt-3">
+            Warning: No providers selected. The provider filter will be hidden on the Discover page.
+          </p>
+        )}
+      </SettingSection>
+
+      {/* VIPER - Velocity-Informed Protection & Episode Removal */}
+      <SettingSection title="VIPER" icon={Zap}>
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
+          <p className="text-blue-300 text-sm">
+            <strong>VIPER</strong> (Velocity-Informed Protection & Episode Removal) intelligently manages TV show episodes based on each user's
             watch progress and velocity. Episodes are deleted only after all active users have watched them,
             and can be automatically re-downloaded when users approach them.
           </p>
         </div>
 
-        <SettingRow label="Enable Smart Episode Manager" description="Automatically manage episodes based on watch progress">
+        <SettingRow label="Enable VIPER" description="Automatically manage episodes based on watch progress">
           <Toggle
             checked={getBool('smart_cleanup_enabled')}
             onChange={(v) => updateSetting('smart_cleanup_enabled', v)}
           />
         </SettingRow>
 
-        <SettingRow label="Run Now" description="Manually trigger smart cleanup">
+        <SettingRow label="Run Now" description="Manually trigger VIPER cleanup">
           <div className="flex items-center gap-2">
             <button
               onClick={() => runSmartCleanup(true)}
@@ -973,7 +1253,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <SettingRow label="Cleanup Schedule" description="When to run smart episode cleanup">
+        <SettingRow label="Cleanup Schedule" description="When to run VIPER episode cleanup">
           <ScheduleInput
             value={getStr('velocity_cleanup_schedule', '0 3 * * *')}
             onChange={(v) => updateSetting('velocity_cleanup_schedule', v)}

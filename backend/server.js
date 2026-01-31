@@ -32,7 +32,7 @@ const RadarrService = require('./services/radarr');
 const RulesEngine = require('./services/rules-engine');
 const scheduler = require('./services/scheduler');
 const NotificationService = require('./services/notifications');
-const SmartEpisodeManager = require('./services/smart-episodes');
+const Viper = require('./services/smart-episodes');
 
 const app = express();
 const PORT = process.env.PORT || 3100;
@@ -761,6 +761,29 @@ app.get('/api/discover/genres', authenticate, async (req, res) => {
     const { type = 'movie' } = req.query;
     const genres = await TMDBService.getGenres(type);
     res.json(genres);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Default provider IDs for discover filter
+const DEFAULT_DISCOVER_PROVIDERS = [9, 1956, 350, 283, 337, 15, 1899, 8, 2303, 386];
+
+// Get enabled providers for discover filter (accessible by all users)
+app.get('/api/discover/enabled-providers', authenticate, (req, res) => {
+  try {
+    const setting = getSetting('discover_providers');
+    let providerIds = DEFAULT_DISCOVER_PROVIDERS;
+
+    if (setting) {
+      try {
+        providerIds = JSON.parse(setting);
+      } catch (e) {
+        // Use defaults if parsing fails
+      }
+    }
+
+    res.json({ providerIds });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2877,8 +2900,8 @@ app.post('/api/cleanup/run', authenticate, requireAdmin, async (req, res) => {
 // Get cleanup candidates without running cleanup
 app.get('/api/cleanup/preview', authenticate, requireAdmin, async (req, res) => {
   try {
-    const SmartEpisodeManager = require('./services/smart-episodes');
-    const smartManager = new SmartEpisodeManager();
+    const Viper = require('./services/smart-episodes');
+    const smartManager = new Viper();
     await smartManager.initialize();
 
     // Run as dry run to get candidates
@@ -2908,8 +2931,8 @@ app.get('/api/cleanup/show/:ratingKey', authenticate, requireAdmin, async (req, 
   const { ratingKey } = req.params;
 
   try {
-    const SmartEpisodeManager = require('./services/smart-episodes');
-    const smartManager = new SmartEpisodeManager();
+    const Viper = require('./services/smart-episodes');
+    const smartManager = new Viper();
     await smartManager.initialize();
 
     const analysis = await smartManager.analyzeShow(ratingKey);
@@ -2958,8 +2981,8 @@ app.get('/api/cleanup/active-shows', authenticate, requireAdmin, async (req, res
   const { days = 30 } = req.query;
 
   try {
-    const SmartEpisodeManager = require('./services/smart-episodes');
-    const smartManager = new SmartEpisodeManager();
+    const Viper = require('./services/smart-episodes');
+    const smartManager = new Viper();
     await smartManager.initialize();
 
     const activeShows = smartManager.getShowsWithActiveViewers(parseInt(days));
@@ -2977,8 +3000,8 @@ app.get('/api/cleanup/active-shows', authenticate, requireAdmin, async (req, res
 // Get protection stats for troubleshooting
 app.get('/api/cleanup/protection-stats', authenticate, requireAdmin, async (req, res) => {
   try {
-    const SmartEpisodeManager = require('./services/smart-episodes');
-    const smartManager = new SmartEpisodeManager();
+    const Viper = require('./services/smart-episodes');
+    const smartManager = new Viper();
     await smartManager.initialize();
 
     const settings = smartManager.getSettings();
