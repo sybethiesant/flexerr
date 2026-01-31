@@ -2,6 +2,41 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.3-beta] - 2026-01-31
+
+### Changed
+
+- **Rebranded to VIPER**: Smart Episode Manager renamed to VIPER (Velocity-Informed Protection & Episode Removal)
+  - Updated all log prefixes from `[SmartCleanup]` to `[VIPER]`
+  - Updated Settings UI with VIPER branding and full acronym description
+  - Updated all documentation references
+
+### Improved
+
+- **Longer Content Retention**: Adjusted default settings to keep content longer
+  - Episodes after watching: 7 days (was 1)
+  - Velocity buffer: 21 days (was 10)
+  - Max episodes ahead: 60 (was 30)
+  - Leaving Soon buffer: 21 days (was 15)
+  - Watchlist grace period: 60 days (was 45)
+
+- **Updated Cleanup Rules**:
+  - Watched Movies: 60 days (was 30)
+  - Inactive TV Shows: 90 days (was 60)
+  - Old Unwatched Movies: 120 days (was 90)
+  - Disabled overly aggressive "Unrequested" rules (no time limit)
+  - Added new "Unwatchlisted Content (7 days)" rules for movies and TV shows
+
+### Fixed
+
+- **Plex Watchlist Sync**: Fixed items added via Flexerr not being pushed to Plex watchlist
+  - Switched from broken search API to metadata API endpoint
+  - Removed X-Plex-Client-Identifier header that caused 401 errors
+  - Added IMDB ID matching for reliable Plex Discover lookups
+  - Fixed PlexService constructor call in watchlist-trigger.js
+
+- **Protection Feature**: Fixed protection not saving correctly to database
+
 ## [1.1.2] - 2026-01-29
 
 ### Fixed
