@@ -1362,28 +1362,30 @@ export default function MediaDetails() {
               </button>
             )}
 
-            {/* Protection Toggle - Show for available content */}
-            {requestStatus === 'available' && (
-              <button
-                onClick={toggleProtection}
-                disabled={protectionLoading}
-                className={`btn flex items-center space-x-2 ${
-                  isProtected
-                    ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
-                }`}
-                title={isProtected ? 'Remove protection - allow cleanup' : 'Protect from all cleanup rules'}
-              >
-                {protectionLoading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : isProtected ? (
-                  <ShieldCheck className="h-5 w-5" />
-                ) : (
-                  <Shield className="h-5 w-5" />
-                )}
-                <span>{isProtected ? 'Protected' : 'Protect'}</span>
-              </button>
-            )}
+            {/* Protection Toggle - Show for all content */}
+            <button
+              onClick={toggleProtection}
+              disabled={protectionLoading}
+              className={`btn flex items-center space-x-2 ${
+                isProtected
+                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+              }`}
+              title={isProtected
+                ? 'Remove protection - allow cleanup'
+                : requestStatus === 'available'
+                  ? 'Protect from all cleanup rules'
+                  : 'Protect and trigger download'}
+            >
+              {protectionLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : isProtected ? (
+                <ShieldCheck className="h-5 w-5" />
+              ) : (
+                <Shield className="h-5 w-5" />
+              )}
+              <span>{isProtected ? 'Protected' : 'Protect'}</span>
+            </button>
 
             {/* Stats Button (Admin only) */}
             {user?.is_admin && (
