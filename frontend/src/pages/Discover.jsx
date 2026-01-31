@@ -8,21 +8,8 @@ import {
 import PlatformBar from '../components/PlatformBar';
 import FilterDropdown, { RangeSlider } from '../components/FilterDropdown';
 
-// Featured streaming providers - exact list requested
-// Provider IDs from TMDB/JustWatch (verified)
-const FEATURED_PROVIDERS = [
-  { id: 9, name: 'Amazon Prime Video' },
-  { id: 1956, name: 'Angel Studios' },
-  { id: 350, name: 'Apple TV+' },
-  { id: 283, name: 'Crunchyroll' },
-  { id: 337, name: 'Disney+' },
-  { id: 15, name: 'Hulu' },
-  { id: 1899, name: 'Max' },
-  { id: 8, name: 'Netflix' },
-  { id: 2303, name: 'Paramount+' },  // Updated: was 531, now 2303 (Premium)
-  { id: 386, name: 'Peacock' },
-];
-const FEATURED_PROVIDER_IDS = FEATURED_PROVIDERS.map(p => p.id);
+// Default enabled provider IDs (popular US streaming services)
+const DEFAULT_ENABLED_PROVIDER_IDS = [8, 9, 337, 1899, 15, 386, 350, 2303, 283];
 
 // Debounce hook
 function useDebounce(value, delay) {
@@ -210,6 +197,7 @@ export default function Discover() {
 
   // Data states
   const [providers, setProviders] = useState([]);
+  const [enabledProviderIds, setEnabledProviderIds] = useState(DEFAULT_ENABLED_PROVIDER_IDS);
   const [genres, setGenres] = useState([]);
   const [regions, setRegions] = useState([]);
   const [content, setContent] = useState([]);
@@ -243,7 +231,23 @@ export default function Discover() {
     setSearchParams(params, { replace: true });
   }, [filters, setSearchParams]);
 
-  // Fetch providers (filtered to featured only)
+  // Fetch enabled provider IDs from settings (once on mount)
+  useEffect(() => {
+    const fetchEnabledProviders = async () => {
+      try {
+        const res = await api.get('/discover/enabled-providers');
+        if (res.data.providerIds && res.data.providerIds.length > 0) {
+          setEnabledProviderIds(res.data.providerIds);
+        }
+      } catch (err) {
+        // Use defaults if settings not available
+        console.warn('Using default providers:', err.message);
+      }
+    };
+    fetchEnabledProviders();
+  }, []);
+
+  // Fetch providers (filtered to enabled only)
   useEffect(() => {
     const fetchProviders = async () => {
       setLoadingProviders(true);
@@ -251,14 +255,18 @@ export default function Discover() {
         const res = await api.get('/discover/providers', {
           params: { type: filters.type, region: filters.region }
         });
-        // Filter to only show featured providers, maintaining TMDB order
+        // Filter to only show enabled providers
         const allProviders = res.data.providers || [];
-        const featured = allProviders.filter(p => FEATURED_PROVIDER_IDS.includes(p.id));
-        // Sort by our preferred order
-        featured.sort((a, b) => {
-          return FEATURED_PROVIDER_IDS.indexOf(a.id) - FEATURED_PROVIDER_IDS.indexOf(b.id);
+        const enabled = allProviders.filter(p => enabledProviderIds.includes(p.id));
+        // Sort by enabled order (maintain admin's selection order) then by display_priority
+        const enabledOrder = new Map(enabledProviderIds.map((id, idx) => [id, idx]));
+        enabled.sort((a, b) => {
+          const orderA = enabledOrder.get(a.id) ?? 999;
+          const orderB = enabledOrder.get(b.id) ?? 999;
+          if (orderA !== orderB) return orderA - orderB;
+          return (a.display_priority || 0) - (b.display_priority || 0);
         });
-        setProviders(featured);
+        setProviders(enabled);
       } catch (err) {
         console.error('Failed to fetch providers:', err);
       } finally {
@@ -266,7 +274,7 @@ export default function Discover() {
       }
     };
     fetchProviders();
-  }, [filters.type, filters.region]);
+  }, [filters.type, filters.region, enabledProviderIds]);
 
   // Fetch genres
   useEffect(() => {

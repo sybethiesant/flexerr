@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { db, getSetting, log } = require('../database');
 const RulesEngine = require('./rules-engine');
-const SmartEpisodeManager = require('./smart-episodes');
+const Viper = require('./smart-episodes');
 const { getWatchlistPriorityService } = require('./watchlist-priority');
 const WatchlistTriggerService = require('./watchlist-trigger');
 const PlexSync = require('./plex-sync');
@@ -11,7 +11,7 @@ class Scheduler {
     this.jobs = new Map();
     this.isRunning = false;
     this.rulesEngine = new RulesEngine();
-    this.smartManager = new SmartEpisodeManager();
+    this.viper = new Viper();
     this.watchlistPriority = getWatchlistPriorityService();
     this.lastVelocityCheck = null;
     this.lastRedownloadCheck = null;
@@ -327,8 +327,8 @@ class Scheduler {
 
     try {
       console.log('[Scheduler] Running velocity check...');
-      await this.smartManager.initialize();
-      const result = await this.smartManager.handleVelocityChanges();
+      await this.viper.initialize();
+      const result = await this.viper.handleVelocityChanges();
 
       this.lastVelocityCheck = {
         timestamp: new Date(),
@@ -337,13 +337,13 @@ class Scheduler {
       };
 
       if (result.changesDetected > 0) {
-        log('info', 'smart-episodes', `Velocity check: ${result.changesDetected} changes detected`, {
+        log('info', 'viper', `Velocity check: ${result.changesDetected} changes detected`, {
           details: JSON.stringify(result)
         });
       }
     } catch (error) {
       console.error('[Scheduler] Velocity check failed:', error.message);
-      log('error', 'smart-episodes', 'Velocity check failed', { error: error.message });
+      log('error', 'viper', 'Velocity check failed', { error: error.message });
     }
   }
 
@@ -356,13 +356,13 @@ class Scheduler {
 
     try {
       console.log('[Scheduler] Running redownload check...');
-      await this.smartManager.initialize();
+      await this.viper.initialize();
 
       // First check for emergencies
-      const emergencyResult = await this.smartManager.runEmergencyRedownloads();
+      const emergencyResult = await this.viper.runEmergencyRedownloads();
 
       // Then run standard proactive redownloads
-      const redownloadResult = await this.smartManager.runProactiveRedownloads();
+      const redownloadResult = await this.viper.runProactiveRedownloads();
 
       this.lastRedownloadCheck = {
         timestamp: new Date(),
@@ -372,14 +372,14 @@ class Scheduler {
 
       const totalProcessed = (emergencyResult.processed || 0) + (redownloadResult.processed || 0);
       if (totalProcessed > 0) {
-        log('info', 'smart-episodes', `Redownload check: ${totalProcessed} episodes processed`, {
+        log('info', 'viper', `Redownload check: ${totalProcessed} episodes processed`, {
           emergencies: emergencyResult.processed || 0,
           proactive: redownloadResult.processed || 0
         });
       }
     } catch (error) {
       console.error('[Scheduler] Redownload check failed:', error.message);
-      log('error', 'smart-episodes', 'Redownload check failed', { error: error.message });
+      log('error', 'viper', 'Redownload check failed', { error: error.message });
     }
   }
 
@@ -670,13 +670,13 @@ class Scheduler {
       this.isRunning = true;
       console.log(`[Scheduler] Running velocity cleanup (dryRun: ${dryRun})...`);
 
-      await this.smartManager.initialize();
+      await this.viper.initialize();
 
       // Run episode cleanup (velocity-based)
-      const episodeResults = await this.smartManager.runVelocityCleanup(dryRun);
+      const episodeResults = await this.viper.runVelocityCleanup(dryRun);
 
       // Run movie cleanup
-      const movieResults = await this.smartManager.runMovieCleanup(dryRun);
+      const movieResults = await this.viper.runMovieCleanup(dryRun);
 
       this.lastVelocityCleanup = {
         timestamp: new Date(),
@@ -737,8 +737,8 @@ class Scheduler {
 
   // Get velocity cleanup status and summary
   async getVelocityCleanupStatus() {
-    await this.smartManager.initialize();
-    const summary = await this.smartManager.getCleanupSummary();
+    await this.viper.initialize();
+    const summary = await this.viper.getCleanupSummary();
 
     return {
       enabled: getSetting('velocity_cleanup_enabled') === 'true',

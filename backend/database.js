@@ -492,8 +492,8 @@ const initSchema = () => {
   // Insert built-in rule templates
   const builtinTemplates = [
     {
-      name: 'Smart Episode Cleanup',
-      description: 'Intelligently delete episodes based on multi-user watch progress. Keeps episodes ahead of active viewers and respects watch pace.',
+      name: 'VIPER Episode Cleanup',
+      description: 'VIPER (Velocity-Informed Protection & Episode Removal) - Intelligently delete episodes based on multi-user watch progress. Keeps episodes ahead of active viewers and respects watch pace.',
       category: 'smart',
       rule_config: JSON.stringify({
         target_type: 'episodes',
