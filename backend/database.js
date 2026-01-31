@@ -756,6 +756,11 @@ const runMigrations = () => {
     db.exec('ALTER TABLE users ADD COLUMN media_server_id INTEGER REFERENCES media_servers(id)');
   }
 
+  if (!userColumnNames.includes('jellyfin_user_id')) {
+    console.log('[Database] Adding jellyfin_user_id column to users table');
+    db.exec('ALTER TABLE users ADD COLUMN jellyfin_user_id TEXT');
+  }
+
   // Migrate existing plex_id values to ensure backwards compatibility
   // plex_id remains the user's identifier on the media server (works for both Plex and Jellyfin)
 
