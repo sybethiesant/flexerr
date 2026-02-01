@@ -1822,10 +1822,40 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('auto_convert_enabled', v)}
           />
         </SettingRow>
-        <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 to HDR10">
+        <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 to HDR10 (incompatible with most players)">
           <Toggle
             checked={getBool('auto_convert_dv5')}
             onChange={(v) => updateSetting('auto_convert_dv5', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Convert DV Profile 7" description="Convert Dolby Vision Profile 7 to HDR10 (limited device support)">
+          <Toggle
+            checked={getBool('auto_convert_dv7')}
+            onChange={(v) => updateSetting('auto_convert_dv7', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Convert DV Profile 8" description="Convert Dolby Vision Profile 8 to HDR10 (for broader compatibility)">
+          <Toggle
+            checked={getBool('auto_convert_dv8')}
+            onChange={(v) => updateSetting('auto_convert_dv8', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Convert AV1 to HEVC" description="Convert AV1 codec to HEVC (many devices lack AV1 support)">
+          <Toggle
+            checked={getBool('auto_convert_av1')}
+            onChange={(v) => updateSetting('auto_convert_av1', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Remux MKV to MP4" description="Repackage MKV files to MP4 for better compatibility (fast, no re-encoding)">
+          <Toggle
+            checked={getBool('auto_convert_mkv_remux')}
+            onChange={(v) => updateSetting('auto_convert_mkv_remux', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Convert Incompatible Audio" description="Convert TrueHD/DTS-HD to EAC3 (many streaming devices can't decode these)">
+          <Toggle
+            checked={getBool('auto_convert_audio')}
+            onChange={(v) => updateSetting('auto_convert_audio', v)}
           />
         </SettingRow>
         <SettingRow label="Hardware Acceleration" description="Use GPU for faster encoding">

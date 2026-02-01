@@ -38,8 +38,29 @@ class MediaConverterService {
     return getSetting('auto_convert_enabled') === 'true';
   }
 
+  // Individual conversion type settings
   static isDV5ConversionEnabled() {
     return getSetting('auto_convert_dv5') === 'true';
+  }
+
+  static isDV7ConversionEnabled() {
+    return getSetting('auto_convert_dv7') === 'true';
+  }
+
+  static isDV8ConversionEnabled() {
+    return getSetting('auto_convert_dv8') === 'true';
+  }
+
+  static isMKVRemuxEnabled() {
+    return getSetting('auto_convert_mkv_remux') === 'true';
+  }
+
+  static isAV1ConversionEnabled() {
+    return getSetting('auto_convert_av1') === 'true';
+  }
+
+  static isIncompatibleAudioEnabled() {
+    return getSetting('auto_convert_audio') === 'true';
   }
 
   static getHWAccelSettings() {
@@ -188,12 +209,14 @@ class MediaConverterService {
       const sideDataList = stream.side_data_list || [];
       for (const sideData of sideDataList) {
         if (sideData.side_data_type === 'DOVI configuration record') {
+          const profile = sideData.dv_profile;
           return {
-            profile: sideData.dv_profile,
+            profile,
             level: sideData.dv_level,
             blCompatId: sideData.dv_bl_signal_compatibility_id,
-            isProfile5: sideData.dv_profile === 5,
-            needsConversion: sideData.dv_profile === 5
+            isProfile5: profile === 5,
+            isProfile7: profile === 7,
+            isProfile8: profile === 8
           };
         }
       }
@@ -206,20 +229,133 @@ class MediaConverterService {
     return null;
   }
 
+  // Detect video codec info
+  detectVideoCodec(mediaInfo) {
+    if (!mediaInfo || !mediaInfo.streams) return null;
+
+    for (const stream of mediaInfo.streams) {
+      if (stream.codec_type !== 'video') continue;
+      return {
+        codec: stream.codec_name,
+        profile: stream.profile,
+        isAV1: stream.codec_name === 'av1',
+        isHEVC: stream.codec_name === 'hevc' || stream.codec_name === 'h265',
+        isH264: stream.codec_name === 'h264' || stream.codec_name === 'avc',
+        bitDepth: stream.bits_per_raw_sample || (stream.pix_fmt?.includes('10') ? 10 : 8)
+      };
+    }
+    return null;
+  }
+
+  // Detect audio codecs that may need conversion
+  detectIncompatibleAudio(mediaInfo) {
+    if (!mediaInfo || !mediaInfo.streams) return null;
+
+    const incompatibleAudio = [];
+    for (const stream of mediaInfo.streams) {
+      if (stream.codec_type !== 'audio') continue;
+
+      const codec = stream.codec_name?.toLowerCase();
+      // TrueHD and DTS-HD are problematic for many streaming devices
+      if (codec === 'truehd' || codec === 'mlp') {
+        incompatibleAudio.push({ codec: 'truehd', index: stream.index, channels: stream.channels });
+      } else if (codec === 'dts' && (stream.profile?.includes('HD') || stream.profile?.includes('MA'))) {
+        incompatibleAudio.push({ codec: 'dts-hd', index: stream.index, channels: stream.channels });
+      }
+    }
+
+    return incompatibleAudio.length > 0 ? incompatibleAudio : null;
+  }
+
+  // Detect container format
+  detectContainer(filePath, mediaInfo) {
+    const ext = path.extname(filePath).toLowerCase();
+    const format = mediaInfo?.format?.format_name || '';
+
+    return {
+      extension: ext,
+      format,
+      isMKV: ext === '.mkv' || format.includes('matroska'),
+      isMP4: ext === '.mp4' || ext === '.m4v' || format.includes('mp4'),
+      isAVI: ext === '.avi' || format.includes('avi')
+    };
+  }
+
   async needsConversion(filePath) {
     try {
       const mediaInfo = await this.getMediaInfo(filePath);
       const dvInfo = this.detectDVProfile(mediaInfo);
+      const videoInfo = this.detectVideoCodec(mediaInfo);
+      const audioInfo = this.detectIncompatibleAudio(mediaInfo);
+      const containerInfo = this.detectContainer(filePath, mediaInfo);
 
       // Get duration for progress tracking
       const duration = mediaInfo.format?.duration ? parseFloat(mediaInfo.format.duration) : null;
 
-      if (dvInfo && dvInfo.isProfile5 && MediaConverterService.isDV5ConversionEnabled()) {
+      // Check Dolby Vision profiles (in priority order)
+      if (dvInfo) {
+        if (dvInfo.isProfile5 && MediaConverterService.isDV5ConversionEnabled()) {
+          return {
+            needs: true,
+            reason: 'Dolby Vision Profile 5 (incompatible with most players)',
+            type: 'dv5',
+            dvInfo,
+            duration
+          };
+        }
+        if (dvInfo.isProfile7 && MediaConverterService.isDV7ConversionEnabled()) {
+          return {
+            needs: true,
+            reason: 'Dolby Vision Profile 7 (limited device support)',
+            type: 'dv7',
+            dvInfo,
+            duration
+          };
+        }
+        if (dvInfo.isProfile8 && MediaConverterService.isDV8ConversionEnabled()) {
+          return {
+            needs: true,
+            reason: 'Dolby Vision Profile 8 (converting to HDR10 for compatibility)',
+            type: 'dv8',
+            dvInfo,
+            duration
+          };
+        }
+      }
+
+      // Check for AV1 codec
+      if (videoInfo?.isAV1 && MediaConverterService.isAV1ConversionEnabled()) {
         return {
           needs: true,
-          reason: 'DV Profile 5 (incompatible with Plex)',
-          type: 'dv5',
-          dvInfo,
+          reason: 'AV1 codec (limited device support, converting to HEVC)',
+          type: 'av1',
+          videoInfo,
+          duration
+        };
+      }
+
+      // Check for MKV container (remux to MP4)
+      if (containerInfo.isMKV && MediaConverterService.isMKVRemuxEnabled()) {
+        // Only remux if video codec is compatible with MP4
+        if (videoInfo?.isHEVC || videoInfo?.isH264) {
+          return {
+            needs: true,
+            reason: 'MKV container (remuxing to MP4 for better compatibility)',
+            type: 'mkv_remux',
+            containerInfo,
+            videoInfo,
+            duration
+          };
+        }
+      }
+
+      // Check for incompatible audio (TrueHD, DTS-HD)
+      if (audioInfo && MediaConverterService.isIncompatibleAudioEnabled()) {
+        return {
+          needs: true,
+          reason: `Incompatible audio: ${audioInfo.map(a => a.codec).join(', ')} (converting to EAC3)`,
+          type: 'audio',
+          audioInfo,
           duration
         };
       }
@@ -300,6 +436,169 @@ class MediaConverterService {
 
         if (code !== 0) {
           reject(new Error('FFmpeg failed with code ' + code + ': ' + stderr.slice(-500)));
+        } else {
+          resolve({ success: true, outputPath });
+        }
+      });
+
+      ffmpeg.on('error', (err) => {
+        jobProgress.delete(jobId);
+        reject(new Error('Failed to spawn ffmpeg: ' + err.message));
+      });
+    });
+  }
+
+  // Generic DV to HDR10 conversion (works for DV5, DV7, DV8)
+  async convertDVToHDR10(inputPath, outputPath, jobId, totalDuration) {
+    // Reuse DV5 conversion logic - same process for all DV profiles
+    return this.convertDV5ToHDR10(inputPath, outputPath, jobId, totalDuration);
+  }
+
+  // Fast MKV to MP4 remux (no re-encoding)
+  async remuxMKVToMP4(inputPath, outputPath, jobId, totalDuration) {
+    await fs.mkdir(this.tempPath, { recursive: true });
+
+    return new Promise((resolve, reject) => {
+      const args = [
+        '-i', inputPath,
+        '-c', 'copy',           // Copy all streams without re-encoding
+        '-movflags', '+faststart', // Optimize for streaming
+        '-map', '0',            // Map all streams
+        '-y', outputPath
+      ];
+
+      console.log('[MediaConverter] Remuxing MKV to MP4: ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('ffmpeg', args);
+      let stderr = '';
+
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+        const progressMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
+        if (progressMatch) {
+          const currentTime = progressMatch[1];
+          const currentSeconds = this.parseTimeToSeconds(currentTime);
+          let percent = totalDuration > 0 ? Math.min(99, Math.round((currentSeconds / totalDuration) * 100)) : 0;
+          jobProgress.set(jobId, { currentTime, currentSeconds, totalDuration, percent });
+          console.log('[MediaConverter] Remux Progress: ' + currentTime + ' (' + percent + '%)');
+        }
+      });
+
+      ffmpeg.on('close', (code) => {
+        jobProgress.delete(jobId);
+        if (code !== 0) {
+          reject(new Error('FFmpeg remux failed with code ' + code + ': ' + stderr.slice(-500)));
+        } else {
+          resolve({ success: true, outputPath });
+        }
+      });
+
+      ffmpeg.on('error', (err) => {
+        jobProgress.delete(jobId);
+        reject(new Error('Failed to spawn ffmpeg: ' + err.message));
+      });
+    });
+  }
+
+  // Convert AV1 to HEVC
+  async convertAV1ToHEVC(inputPath, outputPath, jobId, totalDuration) {
+    const settings = MediaConverterService.getHWAccelSettings();
+    await fs.mkdir(this.tempPath, { recursive: true });
+
+    return new Promise((resolve, reject) => {
+      const args = [];
+
+      // AV1 decode + HEVC encode
+      if (settings.type === 'nvenc') {
+        args.push('-i', inputPath);
+        args.push('-c:v', 'hevc_nvenc');
+        args.push('-preset', 'p7');
+        args.push('-cq', String(settings.crf));
+      } else if (settings.type === 'vaapi') {
+        args.push('-vaapi_device', settings.device);
+        args.push('-i', inputPath);
+        args.push('-vf', 'format=nv12,hwupload');
+        args.push('-c:v', 'hevc_vaapi');
+        args.push('-qp', String(settings.crf));
+      } else {
+        args.push('-i', inputPath);
+        args.push('-c:v', 'libx265');
+        args.push('-crf', String(settings.crf));
+        args.push('-preset', 'medium');
+      }
+
+      args.push('-c:a', 'copy');
+      args.push('-c:s', 'copy');
+      args.push('-map', '0');
+      args.push('-y', outputPath);
+
+      console.log('[MediaConverter] Converting AV1 to HEVC: ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('ffmpeg', args);
+      let stderr = '';
+
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+        const progressMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
+        if (progressMatch) {
+          const currentTime = progressMatch[1];
+          const currentSeconds = this.parseTimeToSeconds(currentTime);
+          let percent = totalDuration > 0 ? Math.min(99, Math.round((currentSeconds / totalDuration) * 100)) : 0;
+          jobProgress.set(jobId, { currentTime, currentSeconds, totalDuration, percent });
+          console.log('[MediaConverter] AV1 Progress: ' + currentTime + ' (' + percent + '%)');
+        }
+      });
+
+      ffmpeg.on('close', (code) => {
+        jobProgress.delete(jobId);
+        if (code !== 0) {
+          reject(new Error('FFmpeg AV1 conversion failed with code ' + code + ': ' + stderr.slice(-500)));
+        } else {
+          resolve({ success: true, outputPath });
+        }
+      });
+
+      ffmpeg.on('error', (err) => {
+        jobProgress.delete(jobId);
+        reject(new Error('Failed to spawn ffmpeg: ' + err.message));
+      });
+    });
+  }
+
+  // Convert incompatible audio (TrueHD, DTS-HD) to EAC3
+  async convertIncompatibleAudio(inputPath, outputPath, jobId, totalDuration) {
+    await fs.mkdir(this.tempPath, { recursive: true });
+
+    return new Promise((resolve, reject) => {
+      // Copy video, convert audio to EAC3 (Dolby Digital Plus) at 640kbps
+      const args = [
+        '-i', inputPath,
+        '-c:v', 'copy',         // Copy video stream
+        '-c:a', 'eac3',         // Convert audio to EAC3
+        '-b:a', '640k',         // High quality audio bitrate
+        '-c:s', 'copy',         // Copy subtitles
+        '-map', '0',            // Map all streams
+        '-y', outputPath
+      ];
+
+      console.log('[MediaConverter] Converting audio to EAC3: ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('ffmpeg', args);
+      let stderr = '';
+
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+        const progressMatch = data.toString().match(/time=(\d{2}:\d{2}:\d{2})/);
+        if (progressMatch) {
+          const currentTime = progressMatch[1];
+          const currentSeconds = this.parseTimeToSeconds(currentTime);
+          let percent = totalDuration > 0 ? Math.min(99, Math.round((currentSeconds / totalDuration) * 100)) : 0;
+          jobProgress.set(jobId, { currentTime, currentSeconds, totalDuration, percent });
+          console.log('[MediaConverter] Audio Progress: ' + currentTime + ' (' + percent + '%)');
+        }
+      });
+
+      ffmpeg.on('close', (code) => {
+        jobProgress.delete(jobId);
+        if (code !== 0) {
+          reject(new Error('FFmpeg audio conversion failed with code ' + code + ': ' + stderr.slice(-500)));
         } else {
           resolve({ success: true, outputPath });
         }
@@ -420,13 +719,31 @@ class MediaConverterService {
       const dir = path.dirname(filePath);
       const base = path.basename(filePath, ext);
 
-      const tempOutput = path.join(this.tempPath, base + '.converting' + ext);
-      const finalOutput = path.join(dir, base + ext);
+      // Determine output extension (changes for MKV remux)
+      const outputExt = type === 'mkv_remux' ? '.mp4' : ext;
+      const tempOutput = path.join(this.tempPath, base + '.converting' + outputExt);
+      const finalOutput = path.join(dir, base + outputExt);
 
-      if (type === 'dv5') {
-        await this.convertDV5ToHDR10(filePath, tempOutput, jobId, duration);
-      } else {
-        throw new Error('Unknown conversion type: ' + type);
+      // Run the appropriate conversion based on type
+      switch (type) {
+        case 'dv5':
+          await this.convertDV5ToHDR10(filePath, tempOutput, jobId, duration);
+          break;
+        case 'dv7':
+        case 'dv8':
+          await this.convertDVToHDR10(filePath, tempOutput, jobId, duration);
+          break;
+        case 'av1':
+          await this.convertAV1ToHEVC(filePath, tempOutput, jobId, duration);
+          break;
+        case 'mkv_remux':
+          await this.remuxMKVToMP4(filePath, tempOutput, jobId, duration);
+          break;
+        case 'audio':
+          await this.convertIncompatibleAudio(filePath, tempOutput, jobId, duration);
+          break;
+        default:
+          throw new Error('Unknown conversion type: ' + type);
       }
 
       if (settings.keepOriginal) {
