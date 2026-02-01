@@ -6,7 +6,7 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { getSetting, createOrUpdateUser, createOrUpdateUserGeneric, getUserById, getUserByPlexId, getUserByMediaServerId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions, getMediaServerByType } = require('../database');
+const { getSetting, createOrUpdateUser, createOrUpdateUserGeneric, getUserById, getUserByPlexId, getUserByMediaServerId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions, getMediaServerByType, log } = require('../database');
 
 const PLEX_AUTH_URL = 'https://plex.tv/api/v2';
 const PLEX_PRODUCT = 'Flexerr';
@@ -119,8 +119,9 @@ class AuthService {
   /**
    * Check if user has access to the configured Plex server
    * Also determines if user is the server owner
+   * If auto-invite is enabled, will invite users who don't have access
    */
-  async checkServerAccess(plexToken) {
+  async checkServerAccess(plexToken, userInfo = null) {
     try {
       // Get user's resources (servers they have access to)
       const response = await axios.get('https://plex.tv/api/v2/resources', {
@@ -162,6 +163,15 @@ class AuthService {
       }
 
       if (!matchedServer) {
+        // User doesn't have access - check if auto-invite is enabled
+        const autoInviteResult = await this.tryAutoInvite(userInfo);
+        if (autoInviteResult.invited) {
+          return {
+            success: false,
+            error: 'An invitation to the Plex server has been sent to your email. Please accept the invitation and try logging in again.',
+            invited: true
+          };
+        }
         return { success: false, error: 'User does not have access to the configured Plex server' };
       }
 
@@ -174,6 +184,82 @@ class AuthService {
       console.error('[Auth] Error checking server access:', error.message);
       return { success: false, error: 'Failed to verify server access' };
     }
+  }
+
+  /**
+   * Try to auto-invite a user to the Plex server
+   * Only works if auto_invite_enabled is true and admin token is available
+   */
+  async tryAutoInvite(userInfo) {
+    const { db } = require('../database');
+
+    // Check if auto-invite is enabled
+    const autoInviteEnabled = getSetting('auto_invite_enabled') === 'true';
+    if (!autoInviteEnabled) {
+      console.log('[Auth] Auto-invite is disabled');
+      return { invited: false };
+    }
+
+    if (!userInfo?.email) {
+      console.log('[Auth] No user email available for auto-invite');
+      return { invited: false };
+    }
+
+    // Get the admin user's Plex token (server owner)
+    const adminUser = db.prepare("SELECT plex_token FROM users WHERE is_owner = 1 LIMIT 1").get();
+    if (!adminUser?.plex_token) {
+      console.log('[Auth] No admin token available for auto-invite');
+      return { invited: false };
+    }
+
+    // Get the server's machine identifier
+    const PlexService = require('./plex');
+    const plexService = PlexService.fromDb();
+    if (!plexService) {
+      console.log('[Auth] Plex service not configured for auto-invite');
+      return { invited: false };
+    }
+
+    let machineId;
+    try {
+      machineId = await plexService.getMachineId();
+    } catch (err) {
+      console.error('[Auth] Failed to get machine ID for auto-invite:', err.message);
+      return { invited: false };
+    }
+
+    // Get library section IDs to share
+    let librarySectionIds = [];
+    const librariesSetting = getSetting('auto_invite_libraries');
+    if (librariesSetting) {
+      try {
+        librarySectionIds = JSON.parse(librariesSetting);
+      } catch (e) {
+        console.warn('[Auth] Invalid auto_invite_libraries setting, sharing all libraries');
+      }
+    }
+
+    // Send the invitation
+    console.log(`[Auth] Auto-inviting ${userInfo.email} to Plex server`);
+    const inviteResult = await PlexService.inviteUserToServer(
+      adminUser.plex_token,
+      machineId,
+      userInfo.email,
+      librarySectionIds
+    );
+
+    if (inviteResult.success) {
+      // Log the invite
+      log('info', 'auto_invite', `Auto-invited ${userInfo.email} to Plex server`, {
+        email: userInfo.email,
+        username: userInfo.username,
+        libraries: librarySectionIds.length > 0 ? librarySectionIds : 'all'
+      });
+      return { invited: true, alreadyShared: inviteResult.alreadyShared };
+    }
+
+    console.error('[Auth] Auto-invite failed:', inviteResult.error);
+    return { invited: false, error: inviteResult.error };
   }
 
   /**
@@ -460,8 +546,8 @@ class AuthService {
       return validation;
     }
 
-    // Check server access
-    const access = await this.checkServerAccess(plexToken);
+    // Check server access (pass user info for auto-invite)
+    const access = await this.checkServerAccess(plexToken, validation.user);
     if (!access.success) {
       return access;
     }

@@ -258,14 +258,8 @@ export default function Discover() {
         // Filter to only show enabled providers
         const allProviders = res.data.providers || [];
         const enabled = allProviders.filter(p => enabledProviderIds.includes(p.id));
-        // Sort by enabled order (maintain admin's selection order) then by display_priority
-        const enabledOrder = new Map(enabledProviderIds.map((id, idx) => [id, idx]));
-        enabled.sort((a, b) => {
-          const orderA = enabledOrder.get(a.id) ?? 999;
-          const orderB = enabledOrder.get(b.id) ?? 999;
-          if (orderA !== orderB) return orderA - orderB;
-          return (a.display_priority || 0) - (b.display_priority || 0);
-        });
+        // Sort alphabetically by name
+        enabled.sort((a, b) => a.name.localeCompare(b.name));
         setProviders(enabled);
       } catch (err) {
         console.error('Failed to fetch providers:', err);

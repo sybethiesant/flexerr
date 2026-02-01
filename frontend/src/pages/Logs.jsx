@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../App';
 import {
   Loader2, RefreshCw, Download, Filter,
-  CheckCircle, XCircle, AlertTriangle, Info
+  CheckCircle, XCircle, AlertTriangle, Info, X
 } from 'lucide-react';
 
 function formatDate(dateString) {
@@ -20,6 +20,7 @@ export default function Logs() {
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [selectedLog, setSelectedLog] = useState(null);
   const [filters, setFilters] = useState({
     level: '',
     category: '',
@@ -100,7 +101,7 @@ export default function Logs() {
           <select
             value={filters.level}
             onChange={(e) => setFilters(prev => ({ ...prev, level: e.target.value, offset: 0 }))}
-            className="w-32"
+            className="w-32 px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="">All Levels</option>
             <option value="error">Errors</option>
@@ -112,7 +113,7 @@ export default function Logs() {
           <select
             value={filters.category}
             onChange={(e) => setFilters(prev => ({ ...prev, category: e.target.value, offset: 0 }))}
-            className="w-40"
+            className="w-40 px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="">All Categories</option>
             <option value="rule">Rules</option>
@@ -124,7 +125,7 @@ export default function Logs() {
           <select
             value={filters.limit}
             onChange={(e) => setFilters(prev => ({ ...prev, limit: parseInt(e.target.value), offset: 0 }))}
-            className="w-32"
+            className="w-32 px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="25">25 per page</option>
             <option value="50">50 per page</option>
@@ -158,7 +159,11 @@ export default function Logs() {
               </thead>
               <tbody className="divide-y divide-slate-700">
                 {logs.map(log => (
-                  <tr key={log.id} className="hover:bg-slate-700/30">
+                  <tr
+                    key={log.id}
+                    className="hover:bg-slate-700/30 cursor-pointer"
+                    onClick={() => setSelectedLog(log)}
+                  >
                     <td className="p-3 text-sm whitespace-nowrap">
                       {formatDate(log.created_at)}
                     </td>
@@ -178,7 +183,7 @@ export default function Logs() {
                     </td>
                     <td className="p-3 text-sm text-slate-500 max-w-xs truncate">
                       {log.details && Object.keys(log.details).length > 0 ? (
-                        <span title={JSON.stringify(log.details)}>
+                        <span>
                           {JSON.stringify(log.details).slice(0, 50)}...
                         </span>
                       ) : '-'}
@@ -209,6 +214,59 @@ export default function Logs() {
               >
                 Next
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Log Details Modal */}
+      {selectedLog && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setSelectedLog(null)}>
+          <div className="bg-slate-800 border border-slate-700 rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+              <h3 className="text-lg font-semibold text-white">Log Details</h3>
+              <button
+                onClick={() => setSelectedLog(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[calc(80vh-120px)] space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Time</label>
+                  <p className="text-white">{formatDate(selectedLog.created_at)}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Level</label>
+                  <p><span className={getLevelBadge(selectedLog.level)}>{selectedLog.level}</span></p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Category</label>
+                  <p className="text-white capitalize">{selectedLog.category}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Action</label>
+                  <p className="text-white">{selectedLog.action}</p>
+                </div>
+              </div>
+
+              {selectedLog.media_title && (
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Media</label>
+                  <p className="text-white">{selectedLog.media_title}</p>
+                </div>
+              )}
+
+              {selectedLog.details && Object.keys(selectedLog.details).length > 0 && (
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Details</label>
+                  <pre className="mt-2 p-3 bg-slate-900 rounded-lg text-sm text-slate-300 overflow-x-auto whitespace-pre-wrap break-words">
+                    {JSON.stringify(selectedLog.details, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </div>
         </div>

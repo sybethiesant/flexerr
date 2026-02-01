@@ -857,6 +857,160 @@ class PlexService {
     };
   }
 
+  // =====================================================
+  // SERVER SHARING / USER INVITES
+  // =====================================================
+
+  /**
+   * Get list of users who have access to this server (friends/shared users)
+   * Uses the admin's token
+   */
+  static async getSharedServerUsers(adminToken, machineIdentifier) {
+    try {
+      const response = await axios.get(`https://plex.tv/api/v2/shared_servers/${machineIdentifier}`, {
+        headers: {
+          'X-Plex-Token': adminToken,
+          'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+          'Accept': 'application/json'
+        }
+      });
+      return response.data || [];
+    } catch (error) {
+      console.error('[Plex] Error getting shared users:', error.response?.status, error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Check if a user (by email or Plex ID) has access to the server
+   */
+  static async userHasServerAccess(adminToken, machineIdentifier, userEmail, userPlexId = null) {
+    try {
+      // Get all friends/shared users
+      const response = await axios.get('https://plex.tv/api/users', {
+        headers: {
+          'X-Plex-Token': adminToken,
+          'Accept': 'application/json'
+        }
+      });
+
+      const users = response.data?.MediaContainer?.User || [];
+
+      // Check if user exists in friends list
+      const friend = users.find(u =>
+        (userEmail && u.email?.toLowerCase() === userEmail.toLowerCase()) ||
+        (userPlexId && u.id?.toString() === userPlexId?.toString())
+      );
+
+      if (!friend) {
+        return { hasAccess: false, reason: 'not_friend' };
+      }
+
+      // Check if they have access to this specific server
+      const serverAccess = friend.Server?.find(s =>
+        s.machineIdentifier === machineIdentifier
+      );
+
+      if (!serverAccess) {
+        return { hasAccess: false, reason: 'no_server_access', friendId: friend.id };
+      }
+
+      return {
+        hasAccess: true,
+        friendId: friend.id,
+        sharedLibraries: serverAccess.numLibraries || 0
+      };
+    } catch (error) {
+      console.error('[Plex] Error checking user access:', error.message);
+      return { hasAccess: false, reason: 'error', error: error.message };
+    }
+  }
+
+  /**
+   * Invite a user to the Plex server with access to specific libraries
+   * @param {string} adminToken - The server owner's Plex token
+   * @param {string} machineIdentifier - The server's machine ID
+   * @param {string} inviteEmail - Email of the user to invite
+   * @param {Array<string>} librarySectionIds - Library section IDs to share (empty = all)
+   */
+  static async inviteUserToServer(adminToken, machineIdentifier, inviteEmail, librarySectionIds = []) {
+    try {
+      console.log(`[Plex] Inviting ${inviteEmail} to server ${machineIdentifier}`);
+      console.log(`[Plex] Libraries to share: ${librarySectionIds.length > 0 ? librarySectionIds.join(', ') : 'all'}`);
+
+      // Build the sharing settings
+      const sharingSettings = {
+        server_id: machineIdentifier,
+        shared_server: {
+          library_section_ids: librarySectionIds.length > 0 ? librarySectionIds : undefined,
+          invited_email: inviteEmail
+        }
+      };
+
+      const response = await axios.post(
+        'https://plex.tv/api/v2/shared_servers',
+        sharingSettings,
+        {
+          headers: {
+            'X-Plex-Token': adminToken,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      console.log(`[Plex] Successfully invited ${inviteEmail}`);
+      return {
+        success: true,
+        message: `Invitation sent to ${inviteEmail}`,
+        data: response.data
+      };
+    } catch (error) {
+      const errorMsg = error.response?.data?.errors?.[0]?.message || error.message;
+      console.error(`[Plex] Error inviting user: ${errorMsg}`);
+
+      // Handle common errors
+      if (error.response?.status === 422) {
+        // User may already have access or invalid email
+        if (errorMsg.includes('already')) {
+          return { success: true, message: 'User already has access', alreadyShared: true };
+        }
+      }
+
+      return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Update library access for an existing shared user
+   */
+  static async updateSharedLibraries(adminToken, sharedServerId, librarySectionIds) {
+    try {
+      const response = await axios.put(
+        `https://plex.tv/api/v2/shared_servers/${sharedServerId}`,
+        {
+          shared_server: {
+            library_section_ids: librarySectionIds
+          }
+        },
+        {
+          headers: {
+            'X-Plex-Token': adminToken,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('[Plex] Error updating shared libraries:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
   /**
    * Add item to Plex watchlist
    * Uses the discover.provider.plex.tv API
