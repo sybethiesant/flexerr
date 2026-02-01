@@ -79,9 +79,11 @@ function Login() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-900">
       <div className="w-full max-w-md">
         <div className="text-center space-y-6">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-primary-500 to-primary-700">
-            <Film className="h-10 w-10 text-white" />
-          </div>
+          <img
+            src="/flexerr-logo.png"
+            alt="Flexerr"
+            className="w-24 h-24 mx-auto object-contain"
+          />
           <h1 className="text-3xl font-bold text-white">Flexerr</h1>
           <p className="text-slate-400">Sign in with your Plex account to continue</p>
 
