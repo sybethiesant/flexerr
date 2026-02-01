@@ -1816,13 +1816,56 @@ export default function SettingsPage() {
           </div>
         )}
 
-        <SettingRow label="Enable Auto Convert" description="Automatically convert incompatible video formats">
+        {/* Detection Settings */}
+        <div className="mb-4 p-3 bg-slate-700/50 rounded-lg">
+          <h4 className="text-sm font-medium text-white mb-1">Incompatible Format Detection</h4>
+          <p className="text-xs text-slate-400">Select which formats to detect and handle automatically</p>
+        </div>
+
+        <SettingRow label="Dolby Vision Profile 5" description="Incompatible with most players including Plex">
           <Toggle
-            checked={getBool('auto_convert_enabled')}
-            onChange={(v) => updateSetting('auto_convert_enabled', v)}
+            checked={getBool('auto_convert_dv5')}
+            onChange={(v) => updateSetting('auto_convert_dv5', v)}
           />
         </SettingRow>
-        <SettingRow label="Prefer Alternate Release" description="Try to find a compatible release from Sonarr/Radarr before converting (deletes file, blocklists release, searches for new)">
+        <SettingRow label="Dolby Vision Profile 7" description="Limited device support">
+          <Toggle
+            checked={getBool('auto_convert_dv7')}
+            onChange={(v) => updateSetting('auto_convert_dv7', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Dolby Vision Profile 8" description="Works on most devices but may want HDR10 for broadest compatibility">
+          <Toggle
+            checked={getBool('auto_convert_dv8')}
+            onChange={(v) => updateSetting('auto_convert_dv8', v)}
+          />
+        </SettingRow>
+        <SettingRow label="AV1 Codec" description="Many devices lack AV1 hardware decode">
+          <Toggle
+            checked={getBool('auto_convert_av1')}
+            onChange={(v) => updateSetting('auto_convert_av1', v)}
+          />
+        </SettingRow>
+        <SettingRow label="MKV Container" description="Some devices prefer MP4 containers">
+          <Toggle
+            checked={getBool('auto_convert_mkv_remux')}
+            onChange={(v) => updateSetting('auto_convert_mkv_remux', v)}
+          />
+        </SettingRow>
+        <SettingRow label="TrueHD/DTS-HD Audio" description="Many streaming devices can't decode lossless audio">
+          <Toggle
+            checked={getBool('auto_convert_audio')}
+            onChange={(v) => updateSetting('auto_convert_audio', v)}
+          />
+        </SettingRow>
+
+        {/* Action Settings */}
+        <div className="mt-6 mb-4 p-3 bg-slate-700/50 rounded-lg">
+          <h4 className="text-sm font-medium text-white mb-1">When Incompatible Format Detected</h4>
+          <p className="text-xs text-slate-400">Choose how to handle detected incompatible files</p>
+        </div>
+
+        <SettingRow label="Search for Alternate Release" description="Quarantine file, blocklist release, and search Sonarr/Radarr for a compatible version">
           <Toggle
             checked={getBool('auto_convert_prefer_alternate')}
             onChange={(v) => updateSetting('auto_convert_prefer_alternate', v)}
@@ -1830,7 +1873,7 @@ export default function SettingsPage() {
         </SettingRow>
         {getBool('auto_convert_prefer_alternate') && (
           <>
-            <SettingRow label="Wait for Alternate" description="How long to wait for Sonarr/Radarr to find an alternate release before converting">
+            <SettingRow label="Wait for Alternate" description="How long to wait for a compatible release before giving up">
               <SelectInput
                 value={getStr('auto_convert_alternate_wait', '24')}
                 onChange={(v) => updateSetting('auto_convert_alternate_wait', v)}
@@ -1844,7 +1887,7 @@ export default function SettingsPage() {
                 ]}
               />
             </SettingRow>
-            <SettingRow label="Blocklist Bad Releases" description="Add incompatible releases to Sonarr/Radarr blocklist (prevents re-downloading same release)">
+            <SettingRow label="Blocklist Incompatible Release" description="Add to Sonarr/Radarr blocklist so it won't be re-downloaded">
               <Toggle
                 checked={getBool('auto_convert_blocklist_bad')}
                 onChange={(v) => updateSetting('auto_convert_blocklist_bad', v)}
@@ -1852,40 +1895,11 @@ export default function SettingsPage() {
             </SettingRow>
           </>
         )}
-        <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 to HDR10 (incompatible with most players)">
+
+        <SettingRow label="Convert if No Alternate Found" description={getBool('auto_convert_prefer_alternate') ? "Fall back to conversion after wait period expires" : "Immediately convert detected incompatible files"}>
           <Toggle
-            checked={getBool('auto_convert_dv5')}
-            onChange={(v) => updateSetting('auto_convert_dv5', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Convert DV Profile 7" description="Convert Dolby Vision Profile 7 to HDR10 (limited device support)">
-          <Toggle
-            checked={getBool('auto_convert_dv7')}
-            onChange={(v) => updateSetting('auto_convert_dv7', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Convert DV Profile 8" description="Convert Dolby Vision Profile 8 to HDR10 (for broader compatibility)">
-          <Toggle
-            checked={getBool('auto_convert_dv8')}
-            onChange={(v) => updateSetting('auto_convert_dv8', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Convert AV1 to HEVC" description="Convert AV1 codec to HEVC (many devices lack AV1 support)">
-          <Toggle
-            checked={getBool('auto_convert_av1')}
-            onChange={(v) => updateSetting('auto_convert_av1', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Remux MKV to MP4" description="Repackage MKV files to MP4 for better compatibility (fast, no re-encoding)">
-          <Toggle
-            checked={getBool('auto_convert_mkv_remux')}
-            onChange={(v) => updateSetting('auto_convert_mkv_remux', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Convert Incompatible Audio" description="Convert TrueHD/DTS-HD to EAC3 (many streaming devices can't decode these)">
-          <Toggle
-            checked={getBool('auto_convert_audio')}
-            onChange={(v) => updateSetting('auto_convert_audio', v)}
+            checked={getBool('auto_convert_enabled')}
+            onChange={(v) => updateSetting('auto_convert_enabled', v)}
           />
         </SettingRow>
         <SettingRow label="Hardware Acceleration" description="Use GPU for faster encoding">

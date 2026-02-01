@@ -61,9 +61,11 @@ volumes:
   flexerr-data:
 ```
 
-## GPU Support (NVIDIA)
+## GPU Support (Optional)
 
-For hardware-accelerated video conversion (Auto Convert feature), run with NVIDIA runtime:
+GPU is only required if using the conversion feature. The "Search for Alternate Release" feature works without GPU.
+
+### NVIDIA
 
 ```bash
 docker run -d \
@@ -78,17 +80,22 @@ docker run -d \
   sybersects/flexerr:latest
 ```
 
-**Requirements:**
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on host
-- NVIDIA GPU with NVENC support (GTX 600+ series)
+**Requirements:** [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) + GTX 600+ GPU
 
-**Verify GPU access:**
+### AMD/Intel (VAAPI)
+
 ```bash
-docker exec flexerr nvidia-smi
-docker exec flexerr ffmpeg -encoders 2>/dev/null | grep nvenc
+docker run -d \
+  --name flexerr \
+  --device /dev/dri:/dev/dri \
+  -e TZ=America/Los_Angeles \
+  -p 5505:5505 \
+  -v flexerr-data:/app/data \
+  -v /path/to/media:/Media \
+  sybersects/flexerr:latest
 ```
 
-### Docker Compose with GPU
+### Docker Compose (NVIDIA)
 
 ```yaml
 services:
@@ -106,6 +113,28 @@ services:
       - TZ=America/Los_Angeles
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+volumes:
+  flexerr-data:
+```
+
+### Docker Compose (VAAPI)
+
+```yaml
+services:
+  flexerr:
+    image: sybersects/flexerr:latest
+    container_name: flexerr
+    restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - "5505:5505"
+    volumes:
+      - flexerr-data:/app/data
+      - /path/to/media:/Media
+    environment:
+      - TZ=America/Los_Angeles
 
 volumes:
   flexerr-data:

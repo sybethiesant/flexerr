@@ -167,9 +167,11 @@ services:
     #   - /dev/dri:/dev/dri
 ```
 
-### NVIDIA GPU Support (NVENC)
+### GPU Support (Optional)
 
-For hardware-accelerated video conversion using NVIDIA GPUs:
+GPU acceleration is **only needed if you plan to convert** incompatible files. If you're using the "Search for Alternate Release" feature without conversion fallback, no GPU is required.
+
+#### NVIDIA GPU (NVENC)
 
 1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) on your host
 
@@ -183,7 +185,7 @@ docker run -d \
   -p 5505:5505 \
   -v flexerr-data:/app/data \
   -v /path/to/media:/Media \
-  flexerr
+  sybersects/flexerr:latest
 ```
 
 3. Verify GPU access:
@@ -192,7 +194,80 @@ docker exec flexerr nvidia-smi
 docker exec flexerr ffmpeg -encoders 2>/dev/null | grep nvenc
 ```
 
+**Docker Compose (NVIDIA):**
+```yaml
+services:
+  flexerr:
+    image: sybersects/flexerr:latest
+    container_name: flexerr
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "5505:5505"
+    volumes:
+      - flexerr-data:/app/data
+      - /path/to/media:/Media
+    environment:
+      - TZ=America/New_York
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+volumes:
+  flexerr-data:
+```
+
 Supported encoders: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`
+
+#### AMD/Intel GPU (VAAPI)
+
+1. Ensure your host has VAAPI drivers installed (mesa-va-drivers on Debian/Ubuntu)
+
+2. Pass through the render device:
+```bash
+docker run -d \
+  --name flexerr \
+  --device /dev/dri:/dev/dri \
+  -p 5505:5505 \
+  -v flexerr-data:/app/data \
+  -v /path/to/media:/Media \
+  sybersects/flexerr:latest
+```
+
+3. Verify VAAPI access:
+```bash
+docker exec flexerr ffmpeg -encoders 2>/dev/null | grep vaapi
+```
+
+**Docker Compose (VAAPI):**
+```yaml
+services:
+  flexerr:
+    image: sybersects/flexerr:latest
+    container_name: flexerr
+    restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - "5505:5505"
+    volumes:
+      - flexerr-data:/app/data
+      - /path/to/media:/Media
+    environment:
+      - TZ=America/New_York
+
+volumes:
+  flexerr-data:
+```
+
+Supported encoders: `h264_vaapi`, `hevc_vaapi`
+
+#### Unraid Users
+
+Install the **Nvidia-Driver** plugin from Community Applications, then add to your container template:
+- Extra Parameters: `--runtime=nvidia`
+- Add these environment variables:
+  - `NVIDIA_VISIBLE_DEVICES=all`
+  - `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`
 
 ### Auto Convert
 
@@ -209,16 +284,20 @@ Automatically convert incompatible media formats for better playback compatibili
 | MKV → MP4 | Container remux for iOS/web | Fast (no re-encode) |
 | TrueHD/DTS-HD → EAC3 | Audio for streaming devices | Medium (audio only) |
 
-**Prefer Alternate Release (Smart Mode):**
+**Search for Alternate Release (Smart Mode):**
 
 Instead of converting immediately, Flexerr can try to find a compatible release first:
 1. Detects incompatible format in newly imported file
-2. Adds the release to Sonarr/Radarr blocklist (prevents re-download)
-3. Deletes the file and triggers a new search
-4. Waits for a configurable time (default 24 hours) for an alternate
-5. Only converts as a last resort if no alternate is found
+2. Quarantines the file (moves to temp location)
+3. Optionally blocklists the release in Sonarr/Radarr (prevents re-download)
+4. Triggers a new search for alternate releases
+5. Waits for a configurable time (default 24 hours) for an alternate
+6. If compatible alternate arrives → deletes quarantined file, done
+7. If no alternate found → restores file and converts (if enabled)
 
-This is ideal when you want the best possible quality - conversion should be the fallback, not the default. Configure via Settings → Auto Convert → "Prefer Alternate Release".
+This is ideal when you want the best possible quality - conversion should be the fallback, not the default. You can even disable conversion entirely and just use this to find better releases.
+
+Configure via Settings → Auto Convert → "Search for Alternate Release".
 
 **Notes:**
 - All options are disabled by default
