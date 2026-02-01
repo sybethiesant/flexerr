@@ -1155,14 +1155,12 @@ class WatchlistTriggerService {
       }
 
       // Step 3: Detect items REMOVED from Plex watchlist
-      // Items that are in Flexerr (active) but NOT in Plex anymore
+      // Note: plex.getWatchlist() now handles pagination to get ALL items
       for (const flexerrItem of flexerrWatchlist) {
         const key = `${flexerrItem.tmdb_id}-${flexerrItem.media_type}`;
         if (!plexWatchlistTmdbIds.has(key)) {
-          // This item was removed from Plex watchlist
           console.log(`[WatchlistSync] Detected REMOVAL: "${flexerrItem.title}" no longer in Plex watchlist`);
 
-          // Mark as removed in Flexerr
           db.prepare(`
             UPDATE watchlist SET
               is_active = 0,

@@ -175,19 +175,38 @@ class PlexService {
   }
 
   async getWatchlist(userId = null) {
-    // Plex watchlist - discover.provider.plex.tv (no params - causes 400)
+    // Plex watchlist - discover.provider.plex.tv with pagination support
     try {
       console.log('[Plex] Fetching watchlist...');
-      const response = await axios.get('https://discover.provider.plex.tv/library/sections/watchlist/all', {
-        headers: {
-          'X-Plex-Token': this.token,
-          'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
-          'Accept': 'application/json'
-        }
-      });
-      const items = response.data.MediaContainer?.Metadata || [];
-      console.log(`[Plex] Got ${items.length} watchlist items`);
-      return items;
+      const allItems = [];
+      let offset = 0;
+      const pageSize = 50;
+      let totalSize = null;
+
+      while (totalSize === null || offset < totalSize) {
+        const response = await axios.get('https://discover.provider.plex.tv/library/sections/watchlist/all', {
+          headers: {
+            'X-Plex-Token': this.token,
+            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
+            'Accept': 'application/json',
+            'X-Plex-Container-Start': String(offset),
+            'X-Plex-Container-Size': String(pageSize)
+          }
+        });
+
+        const container = response.data.MediaContainer;
+        const items = container?.Metadata || [];
+        totalSize = container?.totalSize || 0;
+
+        allItems.push(...items);
+        offset += items.length;
+
+        // Safety: break if no items returned to avoid infinite loop
+        if (items.length === 0) break;
+      }
+
+      console.log(`[Plex] Got ${allItems.length} watchlist items (total: ${totalSize})`);
+      return allItems;
     } catch (error) {
       console.error('[Plex] Watchlist fetch failed:', error.response?.status, error.response?.data || error.message);
       return [];
