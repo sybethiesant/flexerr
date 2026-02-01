@@ -6,13 +6,13 @@
 
 **Media Request & Lifecycle Management for Plex & Jellyfin**
 
-Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr automatically downloads it via Sonarr/Radarr, and intelligently cleans it up when everyone's done watching.
+Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr coordinates with your media management tools (Sonarr/Radarr) to acquire and organize content, then intelligently cleans it up when everyone's done watching.
 
 ## Features
 
 - **Multi-Server Support** - Works with Plex (OAuth) and Jellyfin
-- **Watchlist Integration** - Sync with Plex watchlists for automatic requests
-- **Auto-Download** - Watchlist additions trigger Sonarr/Radarr downloads
+- **Watchlist Integration** - Sync with Plex watchlists for automatic media requests
+- **Media Automation** - Seamlessly integrates with Sonarr/Radarr for hands-free library management
 - **VIPER** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from cleanup
 - **Auto Convert** - Hardware-accelerated video conversion (NVENC/VAAPI)
