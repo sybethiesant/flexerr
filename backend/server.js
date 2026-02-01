@@ -1336,6 +1336,70 @@ app.put('/api/settings', authenticate, requireAdmin, (req, res) => {
   res.json({ success: true });
 });
 
+// Detect available GPU hardware for transcoding
+app.get('/api/settings/detect-hardware', authenticate, requireAdmin, async (req, res) => {
+  const { execSync } = require('child_process');
+  const fs = require('fs');
+
+  const hardware = {
+    nvidia: { available: false, gpus: [] },
+    vaapi: { available: false, devices: [] },
+    recommended: { hwaccel: 'none', device: '', codec: 'hevc' }
+  };
+
+  // Check for NVIDIA GPU
+  try {
+    const nvidiaSmi = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits', {
+      encoding: 'utf8',
+      timeout: 5000
+    });
+    const gpus = nvidiaSmi.trim().split('\n').filter(Boolean).map((line, idx) => {
+      const [name, memory] = line.split(',').map(s => s.trim());
+      return {
+        id: idx,
+        name,
+        memory: `${memory} MB`,
+        device: idx.toString()
+      };
+    });
+    if (gpus.length > 0) {
+      hardware.nvidia.available = true;
+      hardware.nvidia.gpus = gpus;
+      hardware.recommended = { hwaccel: 'nvenc', device: '0', codec: 'hevc' };
+    }
+  } catch (e) {
+    // NVIDIA not available
+  }
+
+  // Check for VAAPI devices (AMD/Intel)
+  try {
+    const driPath = '/dev/dri';
+    if (fs.existsSync(driPath)) {
+      const files = fs.readdirSync(driPath);
+      const renderDevices = files.filter(f => f.startsWith('renderD')).map(f => ({
+        name: f,
+        path: `${driPath}/${f}`
+      }));
+      if (renderDevices.length > 0) {
+        hardware.vaapi.available = true;
+        hardware.vaapi.devices = renderDevices;
+        // Only recommend VAAPI if no NVIDIA
+        if (!hardware.nvidia.available) {
+          hardware.recommended = {
+            hwaccel: 'vaapi',
+            device: renderDevices[0].path,
+            codec: 'hevc'
+          };
+        }
+      }
+    }
+  } catch (e) {
+    // VAAPI not available
+  }
+
+  res.json(hardware);
+});
+
 // =========================
 // SERVICES ROUTES (Admin Only)
 // =========================

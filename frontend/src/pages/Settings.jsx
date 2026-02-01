@@ -520,6 +520,15 @@ export default function SettingsPage() {
   const [loadingProviders, setLoadingProviders] = useState(false);
   const [providerSearch, setProviderSearch] = useState('');
 
+  // Hardware detection state
+  const [detectedHardware, setDetectedHardware] = useState(null);
+  const [detectingHardware, setDetectingHardware] = useState(false);
+
+  // Conversion jobs state
+  const [conversionJobs, setConversionJobs] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [jobsFilter, setJobsFilter] = useState('all');
+
   useEffect(() => {
     fetchSettings();
     fetchServices();
@@ -652,6 +661,88 @@ export default function SettingsPage() {
   const resetSettings = () => {
     setSettings(originalSettings);
     setHasChanges(false);
+  };
+
+  // Detect available GPU hardware
+  const detectHardware = async () => {
+    setDetectingHardware(true);
+    try {
+      const res = await api.get('/settings/detect-hardware');
+      setDetectedHardware(res.data);
+      toast.success('Hardware detection complete');
+    } catch (err) {
+      console.error('Failed to detect hardware:', err);
+      toast.error('Failed to detect hardware');
+    } finally {
+      setDetectingHardware(false);
+    }
+  };
+
+  // Apply recommended hardware settings
+  const applyRecommendedHardware = () => {
+    if (!detectedHardware?.recommended) return;
+    const rec = detectedHardware.recommended;
+    updateSetting('auto_convert_hwaccel', rec.hwaccel);
+    updateSetting('auto_convert_gpu_device', rec.device);
+    updateSetting('auto_convert_codec', rec.codec);
+    toast.success('Applied recommended settings');
+  };
+
+  // Fetch conversion jobs
+  const fetchConversionJobs = async () => {
+    setLoadingJobs(true);
+    try {
+      const res = await api.get('/conversions', { params: { limit: 50 } });
+      setConversionJobs(res.data.jobs || []);
+    } catch (err) {
+      console.error('Failed to fetch conversion jobs:', err);
+    } finally {
+      setLoadingJobs(false);
+    }
+  };
+
+  // Delete a conversion job
+  const deleteConversionJob = async (jobId) => {
+    try {
+      await api.delete(`/conversions/${jobId}`);
+      toast.success('Conversion job deleted');
+      fetchConversionJobs();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete job');
+    }
+  };
+
+  // Retry a failed conversion job
+  const retryConversionJob = async (jobId) => {
+    try {
+      await api.post(`/conversions/${jobId}/retry`);
+      toast.success('Conversion job queued for retry');
+      fetchConversionJobs();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to retry job');
+    }
+  };
+
+  // Delete all failed conversion jobs
+  const deleteAllFailedJobs = async () => {
+    const failedJobs = conversionJobs.filter(j => j.status === 'failed');
+    if (failedJobs.length === 0) {
+      toast.error('No failed jobs to delete');
+      return;
+    }
+    if (!window.confirm(`Delete all ${failedJobs.length} failed conversion jobs?`)) return;
+
+    let deleted = 0;
+    for (const job of failedJobs) {
+      try {
+        await api.delete(`/conversions/${job.id}`);
+        deleted++;
+      } catch (err) {
+        console.error('Failed to delete job:', job.id, err);
+      }
+    }
+    toast.success(`Deleted ${deleted} failed jobs`);
+    fetchConversionJobs();
   };
 
   const fetchProtectionStats = async () => {
@@ -1591,6 +1682,62 @@ export default function SettingsPage() {
 
       {/* Auto Convert Settings */}
       <SettingSection title="Auto Convert" icon={Video} collapsible defaultOpen={false}>
+        {/* Hardware Detection */}
+        <SettingRow label="Detect Hardware" description="Scan for available GPU hardware (NVIDIA, AMD, Intel)">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={detectHardware}
+              disabled={detectingHardware}
+              className="btn btn-secondary flex items-center gap-2 text-sm"
+            >
+              {detectingHardware ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              {detectingHardware ? 'Detecting...' : 'Detect'}
+            </button>
+            {detectedHardware && (
+              <button
+                onClick={applyRecommendedHardware}
+                className="btn btn-primary flex items-center gap-2 text-sm"
+              >
+                <Zap className="h-4 w-4" />
+                Apply Recommended
+              </button>
+            )}
+          </div>
+        </SettingRow>
+
+        {/* Show detected hardware */}
+        {detectedHardware && (
+          <div className="bg-slate-700/50 rounded-lg p-3 text-sm mb-2">
+            <div className="font-medium text-white mb-2">Detected Hardware:</div>
+            <div className="space-y-1 text-slate-300">
+              {detectedHardware.nvidia?.available && (
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-400" />
+                  <span>NVIDIA: {detectedHardware.nvidia.gpus.map(g => g.name).join(', ')}</span>
+                </div>
+              )}
+              {detectedHardware.vaapi?.available && (
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-400" />
+                  <span>VAAPI: {detectedHardware.vaapi.devices.map(d => d.name).join(', ')}</span>
+                </div>
+              )}
+              {!detectedHardware.nvidia?.available && !detectedHardware.vaapi?.available && (
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-4 w-4 text-yellow-400" />
+                  <span>No GPU hardware detected - CPU encoding only</span>
+                </div>
+              )}
+              {detectedHardware.recommended && (
+                <div className="mt-2 text-xs text-slate-400">
+                  Recommended: {detectedHardware.recommended.hwaccel.toUpperCase()}
+                  {detectedHardware.recommended.device && ` (${detectedHardware.recommended.device})`}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <SettingRow label="Enable Auto Convert" description="Automatically convert incompatible video formats on import">
           <Toggle
             checked={getBool('auto_convert_enabled')}
@@ -1603,25 +1750,49 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('auto_convert_dv5', v)}
           />
         </SettingRow>
-        <SettingRow label="Hardware Acceleration" description="Use GPU for faster encoding (VAAPI for AMD)">
+        <SettingRow label="Hardware Acceleration" description="Use GPU for faster encoding">
           <SelectInput
-            value={getStr('auto_convert_hwaccel', 'vaapi')}
+            value={getStr('auto_convert_hwaccel', 'none')}
             onChange={(v) => updateSetting('auto_convert_hwaccel', v)}
             options={[
-              { value: 'vaapi', label: 'VAAPI (AMD/Intel)' },
-              { value: 'nvenc', label: 'NVENC (NVIDIA)' },
-              { value: 'none', label: 'CPU Only' }
+              { value: 'none', label: 'CPU Only (Software)' },
+              ...(detectedHardware?.nvidia?.available ? [{ value: 'nvenc', label: 'NVENC (NVIDIA)' }] : []),
+              ...(detectedHardware?.vaapi?.available ? [{ value: 'vaapi', label: 'VAAPI (AMD/Intel)' }] : []),
+              ...(!detectedHardware ? [
+                { value: 'nvenc', label: 'NVENC (NVIDIA)' },
+                { value: 'vaapi', label: 'VAAPI (AMD/Intel)' }
+              ] : [])
             ]}
           />
         </SettingRow>
-        <SettingRow label="GPU Device" description="Path to GPU device for hardware acceleration">
-          <div className="w-48">
-            <TextInput
+        <SettingRow label="GPU Device" description="GPU device for hardware acceleration">
+          {getStr('auto_convert_hwaccel', 'none') === 'nvenc' && detectedHardware?.nvidia?.available ? (
+            <SelectInput
+              value={getStr('auto_convert_gpu_device', '0')}
+              onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
+              options={detectedHardware.nvidia.gpus.map(gpu => ({
+                value: gpu.device,
+                label: `${gpu.name} (${gpu.memory})`
+              }))}
+            />
+          ) : getStr('auto_convert_hwaccel', 'none') === 'vaapi' && detectedHardware?.vaapi?.available ? (
+            <SelectInput
               value={getStr('auto_convert_gpu_device', '/dev/dri/renderD128')}
               onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
-              placeholder="/dev/dri/renderD128"
+              options={detectedHardware.vaapi.devices.map(dev => ({
+                value: dev.path,
+                label: dev.name
+              }))}
             />
-          </div>
+          ) : (
+            <div className="w-48">
+              <TextInput
+                value={getStr('auto_convert_gpu_device', '')}
+                onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
+                placeholder={getStr('auto_convert_hwaccel', 'none') === 'nvenc' ? '0' : '/dev/dri/renderD128'}
+              />
+            </div>
+          )}
         </SettingRow>
         <SettingRow label="Output Codec" description="Video codec for converted files">
           <SelectInput
@@ -1630,7 +1801,7 @@ export default function SettingsPage() {
             options={[
               { value: 'hevc', label: 'HEVC (H.265)' },
               { value: 'h264', label: 'H.264' },
-              { value: 'av1', label: 'AV1' }
+              ...(getStr('auto_convert_hwaccel', 'none') === 'none' ? [{ value: 'av1', label: 'AV1 (slow, CPU only)' }] : [])
             ]}
           />
         </SettingRow>
@@ -1675,6 +1846,97 @@ export default function SettingsPage() {
             unit="jobs"
           />
         </SettingRow>
+
+        {/* Conversion Jobs Management */}
+        <div className="border-t border-slate-700 pt-4 mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-medium text-white">Conversion Jobs</div>
+            <div className="flex items-center gap-2">
+              <SelectInput
+                value={jobsFilter}
+                onChange={setJobsFilter}
+                options={[
+                  { value: 'all', label: 'All Jobs' },
+                  { value: 'failed', label: 'Failed' },
+                  { value: 'pending', label: 'Pending' },
+                  { value: 'processing', label: 'Processing' },
+                  { value: 'completed', label: 'Completed' }
+                ]}
+              />
+              <button
+                onClick={fetchConversionJobs}
+                disabled={loadingJobs}
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+              >
+                {loadingJobs ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Refresh
+              </button>
+              {conversionJobs.filter(j => j.status === 'failed').length > 0 && (
+                <button
+                  onClick={deleteAllFailedJobs}
+                  className="btn btn-secondary text-red-400 flex items-center gap-2 text-sm"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Failed
+                </button>
+              )}
+            </div>
+          </div>
+
+          {conversionJobs.length === 0 ? (
+            <div className="text-sm text-slate-400 text-center py-4">
+              {loadingJobs ? 'Loading...' : 'No conversion jobs found. Click Refresh to load.'}
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {conversionJobs
+                .filter(j => jobsFilter === 'all' || j.status === jobsFilter)
+                .map(job => (
+                  <div key={job.id} className="flex items-center justify-between bg-slate-700/50 rounded p-2 text-sm">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-white truncate">{job.title}</div>
+                      <div className="text-xs text-slate-400 flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 rounded text-xs ${
+                          job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                          job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                          job.status === 'processing' ? 'bg-blue-500/20 text-blue-400' :
+                          'bg-yellow-500/20 text-yellow-400'
+                        }`}>
+                          {job.status}
+                        </span>
+                        <span>{job.conversion_type}</span>
+                        {job.error_message && (
+                          <span className="text-red-400 truncate" title={job.error_message}>
+                            {job.error_message.slice(0, 50)}...
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 ml-2">
+                      {job.status === 'failed' && (
+                        <button
+                          onClick={() => retryConversionJob(job.id)}
+                          className="p-1 text-slate-400 hover:text-white"
+                          title="Retry"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </button>
+                      )}
+                      {job.status !== 'processing' && (
+                        <button
+                          onClick={() => deleteConversionJob(job.id)}
+                          className="p-1 text-slate-400 hover:text-red-400"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
       </SettingSection>
 
       {/* Floating Save Bar */}
