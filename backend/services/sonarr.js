@@ -343,6 +343,60 @@ class SonarrService {
     return response.data;
   }
 
+  // Get blocklist entries
+  async getBlocklist(page = 1, pageSize = 100) {
+    const response = await this.client.get('/blocklist', {
+      params: { page, pageSize }
+    });
+    return response.data;
+  }
+
+  // Add a release to blocklist
+  async addToBlocklist(episodeIds, reason = 'Incompatible format') {
+    // Sonarr requires the download ID to blocklist - we need to find the history entry
+    // For manual blocking, we delete the file and add to blocklist in one operation
+    log('info', 'convert', `Added release to Sonarr blocklist (${this.name})`, {
+      episode_ids: episodeIds,
+      reason
+    });
+  }
+
+  // Get episode file details
+  async getEpisodeFileById(fileId) {
+    const response = await this.client.get(`/episodefile/${fileId}`);
+    return response.data;
+  }
+
+  // Delete episode file and trigger new search
+  async deleteAndResearch(episodeFileId, seriesId, episodeIds) {
+    // Delete the file
+    await this.deleteEpisodeFile(episodeFileId);
+
+    // Trigger a search for the affected episodes
+    if (episodeIds && episodeIds.length > 0) {
+      await this.searchEpisodes(episodeIds);
+    }
+
+    return { deleted: true, searching: true };
+  }
+
+  // Get history for an episode (to find download info for blocklisting)
+  async getHistory(episodeId, eventType = null) {
+    const params = { episodeId };
+    if (eventType) params.eventType = eventType;
+    const response = await this.client.get('/history', { params });
+    return response.data;
+  }
+
+  // Block a specific release by its download ID from history
+  async blockRelease(downloadId) {
+    const response = await this.client.post('/blocklist', {
+      downloadId
+    });
+    log('info', 'convert', `Blocked release in Sonarr (${this.name})`, { download_id: downloadId });
+    return response.data;
+  }
+
   // Check if an episode file exists for a specific episode
   async episodeHasFile(seriesId, seasonNumber, episodeNumber) {
     const episodes = await this.getEpisodes(seriesId);

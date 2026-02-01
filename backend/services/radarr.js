@@ -285,6 +285,48 @@ class RadarrService {
       media_id: movieFileId
     });
   }
+
+  // Get blocklist entries
+  async getBlocklist(page = 1, pageSize = 100) {
+    const response = await this.client.get('/blocklist', {
+      params: { page, pageSize }
+    });
+    return response.data;
+  }
+
+  // Get history for a movie (to find download info for blocklisting)
+  async getHistory(movieId, eventType = null) {
+    const params = { movieId };
+    if (eventType) params.eventType = eventType;
+    const response = await this.client.get('/history', { params });
+    return response.data;
+  }
+
+  // Block a specific release by its download ID from history
+  async blockRelease(downloadId) {
+    const response = await this.client.post('/blocklist', {
+      downloadId
+    });
+    log('info', 'convert', `Blocked release in Radarr (${this.name})`, { download_id: downloadId });
+    return response.data;
+  }
+
+  // Delete movie file and trigger new search
+  async deleteAndResearch(movieFileId, movieId) {
+    // Delete the file
+    await this.deleteMovieFile(movieFileId);
+
+    // Trigger a search for the movie
+    await this.searchMovie(movieId);
+
+    return { deleted: true, searching: true };
+  }
+
+  // Get movie file by ID
+  async getMovieFileById(fileId) {
+    const response = await this.client.get(`/moviefile/${fileId}`);
+    return response.data;
+  }
 }
 
 module.exports = RadarrService;

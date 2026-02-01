@@ -63,6 +63,19 @@ class MediaConverterService {
     return getSetting('auto_convert_audio') === 'true';
   }
 
+  // Alternate release settings
+  static isPreferAlternateEnabled() {
+    return getSetting('auto_convert_prefer_alternate') === 'true';
+  }
+
+  static getAlternateWaitHours() {
+    return parseInt(getSetting('auto_convert_alternate_wait')) || 24;
+  }
+
+  static isBlocklistBadEnabled() {
+    return getSetting('auto_convert_blocklist_bad') === 'true';
+  }
+
   static getHWAccelSettings() {
     return {
       type: getSetting('auto_convert_hwaccel') || 'vaapi',
@@ -618,7 +631,7 @@ class MediaConverterService {
     });
   }
 
-  async processFile(filePath, title, mediaType, tmdbId) {
+  async processFile(filePath, title, mediaType, tmdbId, arrInfo = null) {
     if (!MediaConverterService.isEnabled()) {
       console.log('[MediaConverter] Auto-convert is disabled');
       return { processed: false, reason: 'disabled' };
@@ -633,6 +646,34 @@ class MediaConverterService {
     console.log('[MediaConverter] Reason:', check.reason);
     console.log('[MediaConverter] Duration:', check.duration, 'seconds');
 
+    // Check if "Prefer Alternate Release" is enabled
+    if (MediaConverterService.isPreferAlternateEnabled() && arrInfo) {
+      console.log('[MediaConverter] Prefer Alternate enabled - will search for alternate release first');
+
+      // Queue alternate search instead of immediate conversion
+      const searchId = this.createAlternateSearchEntry(
+        filePath,
+        title,
+        mediaType,
+        tmdbId,
+        check.type,
+        check.reason,
+        arrInfo
+      );
+
+      // Schedule the alternate search workflow
+      setImmediate(() => this.runAlternateSearchWorkflow(searchId));
+
+      return {
+        processed: true,
+        searchingAlternate: true,
+        searchId,
+        reason: check.reason,
+        message: 'Searching for alternate release before converting'
+      };
+    }
+
+    // No arrInfo or prefer alternate disabled - queue conversion immediately
     const jobId = this.createConversionJob(filePath, title, mediaType, tmdbId, check.type, check.reason, check.duration);
 
     this.addToQueue({
@@ -647,6 +688,254 @@ class MediaConverterService {
     });
 
     return { processed: true, queued: true, jobId, reason: check.reason };
+  }
+
+  // Create entry in alternate search queue
+  createAlternateSearchEntry(filePath, title, mediaType, tmdbId, conversionType, reason, arrInfo) {
+    const waitHours = MediaConverterService.getAlternateWaitHours();
+    const expiresAt = new Date(Date.now() + waitHours * 60 * 60 * 1000).toISOString();
+
+    const result = db.prepare(`
+      INSERT INTO alternate_search_queue (
+        file_path, title, media_type, tmdb_id,
+        sonarr_series_id, sonarr_episode_id, sonarr_episode_file_id,
+        radarr_movie_id, radarr_movie_file_id,
+        incompatible_reason, conversion_type, status, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'searching', ?)
+    `).run(
+      filePath,
+      title,
+      mediaType,
+      tmdbId,
+      arrInfo.sonarrSeriesId || null,
+      arrInfo.sonarrEpisodeId || null,
+      arrInfo.sonarrEpisodeFileId || null,
+      arrInfo.radarrMovieId || null,
+      arrInfo.radarrMovieFileId || null,
+      reason,
+      conversionType,
+      expiresAt
+    );
+
+    log('info', 'convert', 'Queued alternate search for: ' + title, {
+      search_id: result.lastInsertRowid,
+      reason,
+      expires_at: expiresAt
+    });
+
+    return result.lastInsertRowid;
+  }
+
+  // Run the alternate search workflow
+  async runAlternateSearchWorkflow(searchId) {
+    const entry = db.prepare('SELECT * FROM alternate_search_queue WHERE id = ?').get(searchId);
+    if (!entry) {
+      console.error('[MediaConverter] Alternate search entry not found:', searchId);
+      return;
+    }
+
+    console.log('[MediaConverter] Starting alternate search workflow for:', entry.title);
+
+    try {
+      // Require services dynamically to avoid circular dependencies
+      const SonarrService = require('./sonarr');
+      const RadarrService = require('./radarr');
+
+      if (entry.media_type === 'episode' && entry.sonarr_series_id) {
+        await this.handleSonarrAlternateSearch(entry, SonarrService);
+      } else if (entry.media_type === 'movie' && entry.radarr_movie_id) {
+        await this.handleRadarrAlternateSearch(entry, RadarrService);
+      } else {
+        console.log('[MediaConverter] No Sonarr/Radarr info available, falling back to conversion');
+        await this.fallbackToConversion(entry);
+      }
+    } catch (e) {
+      console.error('[MediaConverter] Alternate search workflow failed:', e.message);
+      await this.fallbackToConversion(entry);
+    }
+  }
+
+  // Handle alternate search for TV episodes via Sonarr
+  async handleSonarrAlternateSearch(entry, SonarrService) {
+    const sonarr = SonarrService.fromDb();
+    if (!sonarr) {
+      console.log('[MediaConverter] Sonarr not configured, falling back to conversion');
+      return this.fallbackToConversion(entry);
+    }
+
+    try {
+      // Step 1: Try to blocklist the current release if enabled
+      if (MediaConverterService.isBlocklistBadEnabled()) {
+        console.log('[MediaConverter] Attempting to blocklist incompatible release...');
+
+        // Get history to find the download ID
+        const history = await sonarr.getHistory(entry.sonarr_episode_id, 'downloadFolderImported');
+        if (history?.records?.length > 0) {
+          const downloadId = history.records[0].downloadId;
+          if (downloadId) {
+            await sonarr.blockRelease(downloadId);
+            console.log('[MediaConverter] Release blocklisted successfully');
+          }
+        }
+      }
+
+      // Step 2: Delete the incompatible file
+      console.log('[MediaConverter] Deleting incompatible file and triggering search...');
+      await sonarr.deleteAndResearch(
+        entry.sonarr_episode_file_id,
+        entry.sonarr_series_id,
+        [entry.sonarr_episode_id]
+      );
+
+      // Step 3: Mark as searching and update status
+      db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
+
+      log('info', 'convert', 'Deleted incompatible release, searching for alternate: ' + entry.title, {
+        search_id: entry.id
+      });
+
+      console.log('[MediaConverter] Alternate search triggered for:', entry.title);
+      console.log('[MediaConverter] Will wait up to ' + MediaConverterService.getAlternateWaitHours() + ' hours for alternate release');
+
+    } catch (e) {
+      console.error('[MediaConverter] Sonarr alternate search failed:', e.message);
+      return this.fallbackToConversion(entry);
+    }
+  }
+
+  // Handle alternate search for movies via Radarr
+  async handleRadarrAlternateSearch(entry, RadarrService) {
+    const radarr = RadarrService.fromDb();
+    if (!radarr) {
+      console.log('[MediaConverter] Radarr not configured, falling back to conversion');
+      return this.fallbackToConversion(entry);
+    }
+
+    try {
+      // Step 1: Try to blocklist the current release if enabled
+      if (MediaConverterService.isBlocklistBadEnabled()) {
+        console.log('[MediaConverter] Attempting to blocklist incompatible release...');
+
+        // Get history to find the download ID
+        const history = await radarr.getHistory(entry.radarr_movie_id, 'downloadFolderImported');
+        if (history?.records?.length > 0) {
+          const downloadId = history.records[0].downloadId;
+          if (downloadId) {
+            await radarr.blockRelease(downloadId);
+            console.log('[MediaConverter] Release blocklisted successfully');
+          }
+        }
+      }
+
+      // Step 2: Delete the incompatible file
+      console.log('[MediaConverter] Deleting incompatible file and triggering search...');
+      await radarr.deleteAndResearch(
+        entry.radarr_movie_file_id,
+        entry.radarr_movie_id
+      );
+
+      // Step 3: Mark as searching and update status
+      db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
+
+      log('info', 'convert', 'Deleted incompatible release, searching for alternate: ' + entry.title, {
+        search_id: entry.id
+      });
+
+      console.log('[MediaConverter] Alternate search triggered for:', entry.title);
+      console.log('[MediaConverter] Will wait up to ' + MediaConverterService.getAlternateWaitHours() + ' hours for alternate release');
+
+    } catch (e) {
+      console.error('[MediaConverter] Radarr alternate search failed:', e.message);
+      return this.fallbackToConversion(entry);
+    }
+  }
+
+  // Fall back to conversion when alternate search fails or isn't possible
+  async fallbackToConversion(entry) {
+    console.log('[MediaConverter] Falling back to conversion for:', entry.title);
+
+    // Check if file still exists
+    try {
+      await fs.access(entry.file_path);
+    } catch (e) {
+      console.log('[MediaConverter] Source file no longer exists, marking as resolved');
+      db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'file_deleted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+      return;
+    }
+
+    // Create conversion job
+    const mediaInfo = await this.getMediaInfo(entry.file_path);
+    const duration = mediaInfo.format?.duration ? parseFloat(mediaInfo.format.duration) : null;
+
+    const jobId = this.createConversionJob(
+      entry.file_path,
+      entry.title,
+      entry.media_type,
+      entry.tmdb_id,
+      entry.conversion_type,
+      entry.incompatible_reason,
+      duration
+    );
+
+    // Update alternate search entry
+    db.prepare(`UPDATE alternate_search_queue SET status = 'converting', resolution = 'no_alternate_found', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+
+    // Queue the conversion
+    this.addToQueue({
+      jobId,
+      filePath: entry.file_path,
+      title: entry.title,
+      mediaType: entry.media_type,
+      tmdbId: entry.tmdb_id,
+      type: entry.conversion_type,
+      reason: entry.incompatible_reason,
+      duration
+    });
+
+    log('info', 'convert', 'No alternate found, falling back to conversion: ' + entry.title, {
+      search_id: entry.id,
+      job_id: jobId
+    });
+  }
+
+  // Check expired alternate searches and trigger conversions
+  static checkExpiredAlternateSearches() {
+    const expired = db.prepare(`
+      SELECT * FROM alternate_search_queue
+      WHERE status = 'waiting'
+      AND expires_at < datetime('now')
+    `).all();
+
+    if (expired.length > 0) {
+      console.log('[MediaConverter] Found ' + expired.length + ' expired alternate search(es)');
+      const converter = new MediaConverterService();
+      for (const entry of expired) {
+        converter.fallbackToConversion(entry);
+      }
+    }
+  }
+
+  // Get alternate search queue entries
+  static getAlternateSearchQueue(status = null) {
+    if (status) {
+      return db.prepare('SELECT * FROM alternate_search_queue WHERE status = ? ORDER BY created_at DESC').all(status);
+    }
+    return db.prepare('SELECT * FROM alternate_search_queue ORDER BY created_at DESC LIMIT 100').all();
+  }
+
+  // Cancel an alternate search and optionally trigger conversion
+  static cancelAlternateSearch(searchId, triggerConversion = false) {
+    const entry = db.prepare('SELECT * FROM alternate_search_queue WHERE id = ?').get(searchId);
+    if (!entry) return null;
+
+    if (triggerConversion && entry.status !== 'resolved' && entry.status !== 'converting') {
+      const converter = new MediaConverterService();
+      converter.fallbackToConversion(entry);
+    } else {
+      db.prepare(`UPDATE alternate_search_queue SET status = 'cancelled', resolution = 'admin_cancelled', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(searchId);
+    }
+
+    return { success: true };
   }
 
   createConversionJob(filePath, title, mediaType, tmdbId, conversionType, reason, duration = null) {
@@ -826,7 +1115,60 @@ class MediaConverterService {
     const mediaType = plexItem.type === 'movie' ? 'movie' : 'episode';
     const tmdbId = null;
 
-    return this.processFile(filePath, title, mediaType, tmdbId);
+    // Try to get Sonarr/Radarr info for alternate release feature
+    let arrInfo = null;
+    if (MediaConverterService.isPreferAlternateEnabled()) {
+      arrInfo = await this.getArrInfoForFile(filePath, mediaType);
+    }
+
+    return this.processFile(filePath, title, mediaType, tmdbId, arrInfo);
+  }
+
+  // Get Sonarr/Radarr info for a file path
+  async getArrInfoForFile(filePath, mediaType) {
+    try {
+      if (mediaType === 'movie') {
+        const RadarrService = require('./radarr');
+        const radarr = RadarrService.fromDb();
+        if (!radarr) return null;
+
+        // Find the movie by file path
+        const movie = await radarr.findMovieByPath(filePath);
+        if (movie) {
+          return {
+            radarrMovieId: movie.id,
+            radarrMovieFileId: movie.movieFile?.id || null
+          };
+        }
+      } else if (mediaType === 'episode') {
+        const SonarrService = require('./sonarr');
+        const sonarr = SonarrService.fromDb();
+        if (!sonarr) return null;
+
+        // Get all series and find the one matching the file path
+        const allSeries = await sonarr.getSeries();
+        for (const series of allSeries) {
+          if (filePath.includes(series.path)) {
+            // Found the series, now find the episode file
+            const episodeFiles = await sonarr.getEpisodeFiles(series.id);
+            const epFile = episodeFiles.find(ef => ef.path === filePath);
+            if (epFile) {
+              // Get the episode ID from the episode file
+              const episodes = await sonarr.getEpisodes(series.id);
+              const episode = episodes.find(e => e.episodeFileId === epFile.id);
+              return {
+                sonarrSeriesId: series.id,
+                sonarrEpisodeId: episode?.id || null,
+                sonarrEpisodeFileId: epFile.id
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[MediaConverter] Error getting Arr info for file:', e.message);
+    }
+    return null;
   }
 
   async scanLibrary(plexService) {
@@ -883,6 +1225,30 @@ function initializeDatabase() {
     )
   `);
 
+  // Table to track incompatible releases awaiting alternates
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS alternate_search_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_path TEXT NOT NULL,
+      title TEXT,
+      media_type TEXT,
+      tmdb_id INTEGER,
+      sonarr_series_id INTEGER,
+      sonarr_episode_id INTEGER,
+      sonarr_episode_file_id INTEGER,
+      radarr_movie_id INTEGER,
+      radarr_movie_file_id INTEGER,
+      incompatible_reason TEXT,
+      conversion_type TEXT,
+      status TEXT DEFAULT 'searching',
+      search_attempts INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT,
+      resolved_at TEXT,
+      resolution TEXT
+    )
+  `);
+
   // Add duration column if missing (migration)
   try {
     db.prepare(`SELECT duration FROM conversion_jobs LIMIT 1`).get();
@@ -906,5 +1272,20 @@ initializeDatabase();
     console.error('[MediaConverter] Error restarting interrupted jobs:', e.message);
   }
 })();
+
+// Check for expired alternate searches every 30 minutes
+setInterval(() => {
+  if (MediaConverterService.isEnabled() && MediaConverterService.isPreferAlternateEnabled()) {
+    MediaConverterService.checkExpiredAlternateSearches();
+  }
+}, 30 * 60 * 1000);
+
+// Initial check on startup (delayed to let services initialize)
+setTimeout(() => {
+  if (MediaConverterService.isEnabled() && MediaConverterService.isPreferAlternateEnabled()) {
+    console.log('[MediaConverter] Checking for expired alternate searches...');
+    MediaConverterService.checkExpiredAlternateSearches();
+  }
+}, 30000);
 
 module.exports = MediaConverterService;

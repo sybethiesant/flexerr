@@ -1822,6 +1822,36 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('auto_convert_enabled', v)}
           />
         </SettingRow>
+        <SettingRow label="Prefer Alternate Release" description="Try to find a compatible release from Sonarr/Radarr before converting (deletes file, blocklists release, searches for new)">
+          <Toggle
+            checked={getBool('auto_convert_prefer_alternate')}
+            onChange={(v) => updateSetting('auto_convert_prefer_alternate', v)}
+          />
+        </SettingRow>
+        {getBool('auto_convert_prefer_alternate') && (
+          <>
+            <SettingRow label="Wait for Alternate" description="How long to wait for Sonarr/Radarr to find an alternate release before converting">
+              <SelectInput
+                value={getStr('auto_convert_alternate_wait', '24')}
+                onChange={(v) => updateSetting('auto_convert_alternate_wait', v)}
+                options={[
+                  { value: '6', label: '6 hours' },
+                  { value: '12', label: '12 hours' },
+                  { value: '24', label: '24 hours (Recommended)' },
+                  { value: '48', label: '48 hours' },
+                  { value: '72', label: '72 hours' },
+                  { value: '168', label: '1 week' }
+                ]}
+              />
+            </SettingRow>
+            <SettingRow label="Blocklist Bad Releases" description="Add incompatible releases to Sonarr/Radarr blocklist (prevents re-downloading same release)">
+              <Toggle
+                checked={getBool('auto_convert_blocklist_bad')}
+                onChange={(v) => updateSetting('auto_convert_blocklist_bad', v)}
+              />
+            </SettingRow>
+          </>
+        )}
         <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 to HDR10 (incompatible with most players)">
           <Toggle
             checked={getBool('auto_convert_dv5')}
