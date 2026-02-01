@@ -1051,6 +1051,32 @@ const runMigrations = () => {
   `);
 
   console.log('[Database] Jellyfin webhook tracking tables initialized');
+
+  // =====================================================
+  // Plex Invitations Tracking Table
+  // =====================================================
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plex_invitations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      username TEXT,
+      plex_id TEXT,
+      user_id INTEGER,
+      status TEXT DEFAULT 'pending',
+      libraries_shared TEXT,
+      invited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      accepted_at DATETIME,
+      error_message TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_plex_invitations_email ON plex_invitations(email);
+    CREATE INDEX IF NOT EXISTS idx_plex_invitations_status ON plex_invitations(status);
+  `);
+
+  console.log('[Database] Plex invitations table initialized');
 };
 
 // Helper functions
@@ -1561,6 +1587,63 @@ const getJellyfinRecentStartEvent = (userId, episodeId, sessionId = null, mediaS
   return db.prepare(query).get(...params);
 };
 
+// =====================================================
+// Plex Invitation Functions
+// =====================================================
+
+/**
+ * Record a Plex invitation
+ */
+const recordPlexInvitation = (inviteData) => {
+  const result = db.prepare(`
+    INSERT INTO plex_invitations (email, username, plex_id, status, libraries_shared, error_message)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    inviteData.email,
+    inviteData.username || null,
+    inviteData.plex_id || null,
+    inviteData.status || 'pending',
+    inviteData.libraries_shared ? JSON.stringify(inviteData.libraries_shared) : null,
+    inviteData.error_message || null
+  );
+  return result.lastInsertRowid;
+};
+
+/**
+ * Update invitation status when user accepts (logs in successfully)
+ */
+const markInvitationAccepted = (email, userId) => {
+  return db.prepare(`
+    UPDATE plex_invitations
+    SET status = 'accepted', user_id = ?, accepted_at = CURRENT_TIMESTAMP
+    WHERE email = ? AND status = 'pending'
+  `).run(userId, email);
+};
+
+/**
+ * Get all invitations with user info
+ */
+const getPlexInvitations = (limit = 100) => {
+  return db.prepare(`
+    SELECT pi.*, u.username as accepted_username, u.thumb as accepted_thumb
+    FROM plex_invitations pi
+    LEFT JOIN users u ON pi.user_id = u.id
+    ORDER BY pi.invited_at DESC
+    LIMIT ?
+  `).all(limit);
+};
+
+/**
+ * Get pending invitation by email
+ */
+const getPendingInvitationByEmail = (email) => {
+  return db.prepare(`
+    SELECT * FROM plex_invitations
+    WHERE email = ? AND status = 'pending'
+    ORDER BY invited_at DESC LIMIT 1
+  `).get(email);
+};
+
 // Initialize on load
 initSchema();
 
@@ -1597,5 +1680,10 @@ module.exports = {
   getJellyfinUserVelocities,
   getJellyfinActiveShows,
   getJellyfinShowHistory,
-  getJellyfinRecentStartEvent
+  getJellyfinRecentStartEvent,
+  // Plex invitation functions
+  recordPlexInvitation,
+  markInvitationAccepted,
+  getPlexInvitations,
+  getPendingInvitationByEmail
 };

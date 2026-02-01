@@ -6,7 +6,7 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { getSetting, createOrUpdateUser, createOrUpdateUserGeneric, getUserById, getUserByPlexId, getUserByMediaServerId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions, getMediaServerByType, log } = require('../database');
+const { getSetting, createOrUpdateUser, createOrUpdateUserGeneric, getUserById, getUserByPlexId, getUserByMediaServerId, createSession, getSessionByTokenHash, deleteSession, cleanExpiredSessions, getMediaServerByType, log, recordPlexInvitation, markInvitationAccepted } = require('../database');
 
 const PLEX_AUTH_URL = 'https://plex.tv/api/v2';
 const PLEX_PRODUCT = 'Flexerr';
@@ -249,6 +249,15 @@ class AuthService {
     );
 
     if (inviteResult.success) {
+      // Record the invitation
+      recordPlexInvitation({
+        email: userInfo.email,
+        username: userInfo.username,
+        plex_id: userInfo.plex_id,
+        status: 'pending',
+        libraries_shared: librarySectionIds.length > 0 ? librarySectionIds : null
+      });
+
       // Log the invite
       log('info', 'auto_invite', `Auto-invited ${userInfo.email} to Plex server`, {
         email: userInfo.email,
@@ -257,6 +266,16 @@ class AuthService {
       });
       return { invited: true, alreadyShared: inviteResult.alreadyShared };
     }
+
+    // Record failed invitation
+    recordPlexInvitation({
+      email: userInfo.email,
+      username: userInfo.username,
+      plex_id: userInfo.plex_id,
+      status: 'failed',
+      libraries_shared: librarySectionIds.length > 0 ? librarySectionIds : null,
+      error_message: inviteResult.error
+    });
 
     console.error('[Auth] Auto-invite failed:', inviteResult.error);
     return { invited: false, error: inviteResult.error };
@@ -564,6 +583,11 @@ class AuthService {
       is_owner: access.isOwner,
       is_admin: access.isOwner && serverOwnerIsAdmin
     });
+
+    // Check if this user was auto-invited and mark as accepted
+    if (validation.user.email) {
+      markInvitationAccepted(validation.user.email, user.id);
+    }
 
     // Generate tokens
     const tokens = this.generateTokens(user);

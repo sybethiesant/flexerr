@@ -1424,6 +1424,25 @@ app.get('/api/settings/plex-libraries', authenticate, requireAdmin, async (req, 
   }
 });
 
+// Get Plex invitations (for auto-invite tracking)
+app.get('/api/settings/invitations', authenticate, requireAdmin, (req, res) => {
+  try {
+    const { getPlexInvitations } = require('./database');
+    const invitations = getPlexInvitations(100);
+
+    // Parse libraries_shared JSON for each invitation
+    const parsed = invitations.map(inv => ({
+      ...inv,
+      libraries_shared: inv.libraries_shared ? JSON.parse(inv.libraries_shared) : null
+    }));
+
+    res.json(parsed);
+  } catch (err) {
+    console.error('[Settings] Error getting invitations:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // =========================
 // SERVICES ROUTES (Admin Only)
 // =========================

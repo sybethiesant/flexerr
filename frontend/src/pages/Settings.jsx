@@ -556,11 +556,16 @@ export default function SettingsPage() {
   const [loadingLibraries, setLoadingLibraries] = useState(false);
   const [selectedLibraries, setSelectedLibraries] = useState([]);
 
+  // Plex invitations tracking
+  const [invitations, setInvitations] = useState([]);
+  const [loadingInvitations, setLoadingInvitations] = useState(false);
+
   useEffect(() => {
     fetchSettings();
     fetchServices();
     detectHardware();
     fetchPlexLibraries();
+    fetchInvitations();
   }, []);
 
   // Parse enabled providers from settings when settings load
@@ -626,6 +631,19 @@ export default function SettingsPage() {
       // Silently fail - Plex might not be configured yet
     } finally {
       setLoadingLibraries(false);
+    }
+  };
+
+  const fetchInvitations = async () => {
+    setLoadingInvitations(true);
+    try {
+      const res = await api.get('/settings/invitations');
+      setInvitations(res.data || []);
+    } catch (err) {
+      console.error('Failed to load invitations:', err);
+      // Silently fail - no invitations yet
+    } finally {
+      setLoadingInvitations(false);
     }
   };
 
@@ -1591,9 +1609,66 @@ export default function SettingsPage() {
 
               {selectedLibraries.length === 0 && getBool('auto_invite_enabled') && plexLibraries.length > 0 && (
                 <p className="text-xs text-yellow-400 mt-2">
-                  ⚠️ No libraries selected. New users won't have access to any content.
+                  No libraries selected. New users won't have access to any content.
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Invited Users List */}
+          {invitations.length > 0 && (
+            <div className="pt-4 border-t border-slate-700 mt-4">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-white">Invited Users</label>
+                <button
+                  onClick={fetchInvitations}
+                  disabled={loadingInvitations}
+                  className="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1"
+                >
+                  {loadingInvitations ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                  Refresh
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {invitations.map(inv => (
+                  <div
+                    key={inv.id}
+                    className="flex items-center justify-between p-2 bg-slate-700/50 rounded-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      {inv.accepted_thumb ? (
+                        <img src={inv.accepted_thumb} alt="" className="w-8 h-8 rounded-full" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center">
+                          <span className="text-xs text-slate-400">{(inv.email || '?')[0].toUpperCase()}</span>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-sm text-white">
+                          {inv.accepted_username || inv.username || inv.email}
+                        </p>
+                        {inv.accepted_username && inv.email && (
+                          <p className="text-xs text-slate-400">{inv.email}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                        inv.status === 'accepted' ? 'bg-green-500/20 text-green-400' :
+                        inv.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400' :
+                        'bg-red-500/20 text-red-400'
+                      }`}>
+                        {inv.status === 'accepted' ? 'Accepted' :
+                         inv.status === 'pending' ? 'Pending' : 'Failed'}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        {new Date(inv.invited_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </SettingSection>
