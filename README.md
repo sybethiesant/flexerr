@@ -1,6 +1,22 @@
-# Flexerr
+<p align="center">
+  <img src="flexerr-logo.png" alt="Flexerr Logo" width="200">
+</p>
 
-**Media Request & Lifecycle Management for Plex & Jellyfin**
+<h1 align="center">Flexerr</h1>
+
+<p align="center">
+  <strong>Media Request & Lifecycle Management for Plex & Jellyfin</strong>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#viper---velocity-informed-protection--episode-removal">VIPER</a> •
+  <a href="#api-reference">API</a>
+</p>
+
+---
 
 Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr automatically downloads it via Sonarr/Radarr, and intelligently cleans it up when everyone's done watching.
 

@@ -44,9 +44,11 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-2">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
-              <Film className="h-5 w-5 text-white" />
-            </div>
+            <img
+              src="/flexerr-logo.png"
+              alt="Flexerr"
+              className="h-9 w-9 object-contain"
+            />
             <span className="text-xl font-bold text-white">Flexerr</span>
           </Link>
 
