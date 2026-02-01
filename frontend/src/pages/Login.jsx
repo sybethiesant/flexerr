@@ -10,6 +10,7 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState(null);
+  const [logoError, setLogoError] = useState(false);
   const pollingRef = useRef(null);
 
   useEffect(() => {
@@ -79,12 +80,16 @@ function Login() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-900">
       <div className="w-full max-w-md">
         <div className="text-center space-y-6">
-          <img
-            src="/flexerr-logo.png"
-            alt="Flexerr"
-            className="w-24 h-24 mx-auto object-contain"
-          />
-          <h1 className="text-3xl font-bold text-white">Flexerr</h1>
+          {!logoError ? (
+            <img
+              src="/flexerr-logo.png"
+              alt="Flexerr"
+              className="w-48 h-48 mx-auto object-contain"
+              onError={() => setLogoError(true)}
+            />
+          ) : (
+            <h1 className="text-4xl font-bold text-white">Flexerr</h1>
+          )}
           <p className="text-slate-400">Sign in with your Plex account to continue</p>
 
           <button
