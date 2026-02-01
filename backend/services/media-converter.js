@@ -632,8 +632,12 @@ class MediaConverterService {
   }
 
   async processFile(filePath, title, mediaType, tmdbId, arrInfo = null) {
-    if (!MediaConverterService.isEnabled()) {
-      console.log('[MediaConverter] Auto-convert is disabled');
+    const preferAlternate = MediaConverterService.isPreferAlternateEnabled();
+    const conversionEnabled = MediaConverterService.isEnabled();
+
+    // Must have either alternate search or conversion enabled
+    if (!preferAlternate && !conversionEnabled) {
+      console.log('[MediaConverter] Neither alternate search nor conversion is enabled');
       return { processed: false, reason: 'disabled' };
     }
 
@@ -642,15 +646,15 @@ class MediaConverterService {
       return { processed: false, reason: 'no conversion needed' };
     }
 
-    console.log('[MediaConverter] File needs conversion:', filePath);
+    console.log('[MediaConverter] Incompatible format detected:', filePath);
     console.log('[MediaConverter] Reason:', check.reason);
     console.log('[MediaConverter] Duration:', check.duration, 'seconds');
 
-    // Check if "Prefer Alternate Release" is enabled
-    if (MediaConverterService.isPreferAlternateEnabled() && arrInfo) {
-      console.log('[MediaConverter] Prefer Alternate enabled - will search for alternate release first');
+    // Check if "Search for Alternate Release" is enabled
+    if (preferAlternate && arrInfo) {
+      console.log('[MediaConverter] Will search for alternate release first');
 
-      // Queue alternate search instead of immediate conversion
+      // Queue alternate search
       const searchId = this.createAlternateSearchEntry(
         filePath,
         title,
@@ -669,11 +673,19 @@ class MediaConverterService {
         searchingAlternate: true,
         searchId,
         reason: check.reason,
-        message: 'Searching for alternate release before converting'
+        message: conversionEnabled
+          ? 'Searching for alternate release (will convert if none found)'
+          : 'Searching for alternate release (conversion disabled)'
       };
     }
 
-    // No arrInfo or prefer alternate disabled - queue conversion immediately
+    // No arrInfo or alternate search disabled
+    if (!conversionEnabled) {
+      console.log('[MediaConverter] Conversion disabled and no Sonarr/Radarr info for alternate search');
+      return { processed: false, reason: 'conversion disabled, no arr info for alternate search' };
+    }
+
+    // Queue conversion immediately
     const jobId = this.createConversionJob(filePath, title, mediaType, tmdbId, check.type, check.reason, check.duration);
 
     this.addToQueue({
@@ -764,7 +776,18 @@ class MediaConverterService {
     }
 
     try {
-      // Step 1: Try to blocklist the current release if enabled
+      // Step 1: Quarantine the file (move to temp location)
+      const quarantinePath = await this.quarantineFile(entry.file_path);
+      if (!quarantinePath) {
+        console.error('[MediaConverter] Failed to quarantine file, falling back to conversion');
+        return this.fallbackToConversion(entry);
+      }
+
+      // Update entry with quarantine path
+      db.prepare(`UPDATE alternate_search_queue SET quarantine_path = ? WHERE id = ?`).run(quarantinePath, entry.id);
+      console.log('[MediaConverter] File quarantined to:', quarantinePath);
+
+      // Step 2: Try to blocklist the current release if enabled
       if (MediaConverterService.isBlocklistBadEnabled()) {
         console.log('[MediaConverter] Attempting to blocklist incompatible release...');
 
@@ -779,19 +802,16 @@ class MediaConverterService {
         }
       }
 
-      // Step 2: Delete the incompatible file
-      console.log('[MediaConverter] Deleting incompatible file and triggering search...');
-      await sonarr.deleteAndResearch(
-        entry.sonarr_episode_file_id,
-        entry.sonarr_series_id,
-        [entry.sonarr_episode_id]
-      );
+      // Step 3: Tell Sonarr to rescan (it will see file is missing) and search
+      console.log('[MediaConverter] Triggering Sonarr rescan and search...');
+      await sonarr.searchEpisodes([entry.sonarr_episode_id]);
 
-      // Step 3: Mark as searching and update status
+      // Step 4: Mark as waiting and update status
       db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
 
-      log('info', 'convert', 'Deleted incompatible release, searching for alternate: ' + entry.title, {
-        search_id: entry.id
+      log('info', 'convert', 'Quarantined incompatible release, searching for alternate: ' + entry.title, {
+        search_id: entry.id,
+        quarantine_path: quarantinePath
       });
 
       console.log('[MediaConverter] Alternate search triggered for:', entry.title);
@@ -812,7 +832,18 @@ class MediaConverterService {
     }
 
     try {
-      // Step 1: Try to blocklist the current release if enabled
+      // Step 1: Quarantine the file (move to temp location)
+      const quarantinePath = await this.quarantineFile(entry.file_path);
+      if (!quarantinePath) {
+        console.error('[MediaConverter] Failed to quarantine file, falling back to conversion');
+        return this.fallbackToConversion(entry);
+      }
+
+      // Update entry with quarantine path
+      db.prepare(`UPDATE alternate_search_queue SET quarantine_path = ? WHERE id = ?`).run(quarantinePath, entry.id);
+      console.log('[MediaConverter] File quarantined to:', quarantinePath);
+
+      // Step 2: Try to blocklist the current release if enabled
       if (MediaConverterService.isBlocklistBadEnabled()) {
         console.log('[MediaConverter] Attempting to blocklist incompatible release...');
 
@@ -827,18 +858,16 @@ class MediaConverterService {
         }
       }
 
-      // Step 2: Delete the incompatible file
-      console.log('[MediaConverter] Deleting incompatible file and triggering search...');
-      await radarr.deleteAndResearch(
-        entry.radarr_movie_file_id,
-        entry.radarr_movie_id
-      );
+      // Step 3: Tell Radarr to rescan (it will see file is missing) and search
+      console.log('[MediaConverter] Triggering Radarr rescan and search...');
+      await radarr.searchMovie(entry.radarr_movie_id);
 
-      // Step 3: Mark as searching and update status
+      // Step 4: Mark as waiting and update status
       db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
 
-      log('info', 'convert', 'Deleted incompatible release, searching for alternate: ' + entry.title, {
-        search_id: entry.id
+      log('info', 'convert', 'Quarantined incompatible release, searching for alternate: ' + entry.title, {
+        search_id: entry.id,
+        quarantine_path: quarantinePath
       });
 
       console.log('[MediaConverter] Alternate search triggered for:', entry.title);
@@ -850,25 +879,108 @@ class MediaConverterService {
     }
   }
 
+  // Quarantine a file by moving it to the temp directory
+  async quarantineFile(filePath) {
+    try {
+      await fs.mkdir(this.tempPath, { recursive: true });
+      const fileName = path.basename(filePath);
+      const quarantinePath = path.join(this.tempPath, 'quarantine_' + Date.now() + '_' + fileName);
+      await moveFile(filePath, quarantinePath);
+      console.log('[MediaConverter] Quarantined file: ' + filePath + ' -> ' + quarantinePath);
+      return quarantinePath;
+    } catch (e) {
+      console.error('[MediaConverter] Failed to quarantine file:', e.message);
+      return null;
+    }
+  }
+
+  // Restore a file from quarantine back to its original location
+  async restoreFromQuarantine(quarantinePath, originalPath) {
+    try {
+      // Check if quarantine file exists
+      await fs.access(quarantinePath);
+
+      // Make sure the original directory exists
+      const dir = path.dirname(originalPath);
+      await fs.mkdir(dir, { recursive: true });
+
+      // Move back
+      await moveFile(quarantinePath, originalPath);
+      console.log('[MediaConverter] Restored file from quarantine: ' + quarantinePath + ' -> ' + originalPath);
+      return true;
+    } catch (e) {
+      console.error('[MediaConverter] Failed to restore from quarantine:', e.message);
+      return false;
+    }
+  }
+
   // Fall back to conversion when alternate search fails or isn't possible
   async fallbackToConversion(entry) {
-    console.log('[MediaConverter] Falling back to conversion for:', entry.title);
+    // Check if conversion is enabled
+    if (!MediaConverterService.isEnabled()) {
+      console.log('[MediaConverter] Conversion disabled - no alternate found for:', entry.title);
 
-    // Check if file still exists
-    try {
-      await fs.access(entry.file_path);
-    } catch (e) {
-      console.log('[MediaConverter] Source file no longer exists, marking as resolved');
-      db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'file_deleted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+      // Clean up quarantined file if it exists and restore original
+      if (entry.quarantine_path) {
+        const restored = await this.restoreFromQuarantine(entry.quarantine_path, entry.file_path);
+        if (restored) {
+          console.log('[MediaConverter] Restored original file (conversion disabled)');
+        }
+      }
+
+      db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'no_alternate_conversion_disabled', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+      log('info', 'convert', 'No alternate found, conversion disabled: ' + entry.title, { search_id: entry.id });
       return;
     }
 
-    // Create conversion job
-    const mediaInfo = await this.getMediaInfo(entry.file_path);
+    console.log('[MediaConverter] Falling back to conversion for:', entry.title);
+
+    let fileToConvert = entry.file_path;
+
+    // Check if file is quarantined and needs to be restored
+    if (entry.quarantine_path) {
+      try {
+        await fs.access(entry.quarantine_path);
+        // Restore from quarantine
+        const restored = await this.restoreFromQuarantine(entry.quarantine_path, entry.file_path);
+        if (!restored) {
+          console.log('[MediaConverter] Failed to restore from quarantine, checking original path...');
+        }
+      } catch (e) {
+        console.log('[MediaConverter] Quarantine file not found, checking original path...');
+      }
+    }
+
+    // Check if file exists at original path (either restored or never quarantined)
+    try {
+      await fs.access(entry.file_path);
+      fileToConvert = entry.file_path;
+    } catch (e) {
+      // File not at original path, check quarantine
+      if (entry.quarantine_path) {
+        try {
+          await fs.access(entry.quarantine_path);
+          // Convert directly from quarantine location
+          fileToConvert = entry.quarantine_path;
+          console.log('[MediaConverter] Will convert from quarantine location');
+        } catch (e2) {
+          console.log('[MediaConverter] Source file no longer exists (not at original or quarantine), marking as resolved');
+          db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'file_deleted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+          return;
+        }
+      } else {
+        console.log('[MediaConverter] Source file no longer exists, marking as resolved');
+        db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'file_deleted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+        return;
+      }
+    }
+
+    // Create conversion job (use fileToConvert which may be quarantine path)
+    const mediaInfo = await this.getMediaInfo(fileToConvert);
     const duration = mediaInfo.format?.duration ? parseFloat(mediaInfo.format.duration) : null;
 
     const jobId = this.createConversionJob(
-      entry.file_path,
+      fileToConvert,
       entry.title,
       entry.media_type,
       entry.tmdb_id,
@@ -883,7 +995,7 @@ class MediaConverterService {
     // Queue the conversion
     this.addToQueue({
       jobId,
-      filePath: entry.file_path,
+      filePath: fileToConvert,
       title: entry.title,
       mediaType: entry.media_type,
       tmdbId: entry.tmdb_id,
@@ -898,19 +1010,63 @@ class MediaConverterService {
     });
   }
 
-  // Check expired alternate searches and trigger conversions
-  static checkExpiredAlternateSearches() {
-    const expired = db.prepare(`
+  // Check all waiting alternate searches for new files or expiration
+  static async checkExpiredAlternateSearches() {
+    const waiting = db.prepare(`
       SELECT * FROM alternate_search_queue
       WHERE status = 'waiting'
-      AND expires_at < datetime('now')
     `).all();
 
-    if (expired.length > 0) {
-      console.log('[MediaConverter] Found ' + expired.length + ' expired alternate search(es)');
-      const converter = new MediaConverterService();
-      for (const entry of expired) {
-        converter.fallbackToConversion(entry);
+    if (waiting.length === 0) return;
+
+    console.log('[MediaConverter] Checking ' + waiting.length + ' waiting alternate search(es)...');
+    const converter = new MediaConverterService();
+
+    for (const entry of waiting) {
+      try {
+        // Check if a new file has arrived at the original path
+        try {
+          await fs.access(entry.file_path);
+
+          // New file exists! Check if it's compatible
+          console.log('[MediaConverter] New file found at original path for: ' + entry.title);
+          const check = await converter.needsConversion(entry.file_path);
+
+          if (!check.needs) {
+            // New file is compatible! Delete quarantined file and mark as resolved
+            console.log('[MediaConverter] New file is compatible! Cleaning up quarantine for: ' + entry.title);
+
+            if (entry.quarantine_path) {
+              try {
+                await fs.unlink(entry.quarantine_path);
+                console.log('[MediaConverter] Deleted quarantined file: ' + entry.quarantine_path);
+              } catch (e) {
+                // Quarantine file may already be gone
+              }
+            }
+
+            db.prepare(`UPDATE alternate_search_queue SET status = 'resolved', resolution = 'alternate_found', resolved_at = CURRENT_TIMESTAMP WHERE id = ?`).run(entry.id);
+            log('info', 'convert', 'Found compatible alternate release: ' + entry.title, { search_id: entry.id });
+            continue;
+          } else {
+            // New file also needs conversion - check if it's a different issue
+            if (check.type !== entry.conversion_type) {
+              console.log('[MediaConverter] New file has different incompatibility (' + check.type + '), will re-queue');
+            }
+            // Fall through to expiration check - we'll convert if expired
+          }
+        } catch (e) {
+          // No new file at original path yet, check if expired
+        }
+
+        // Check if entry has expired
+        const expiresAt = new Date(entry.expires_at);
+        if (expiresAt < new Date()) {
+          console.log('[MediaConverter] Alternate search expired for: ' + entry.title);
+          await converter.fallbackToConversion(entry);
+        }
+      } catch (e) {
+        console.error('[MediaConverter] Error checking alternate search entry ' + entry.id + ':', e.message);
       }
     }
   }
@@ -1230,6 +1386,7 @@ function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS alternate_search_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       file_path TEXT NOT NULL,
+      quarantine_path TEXT,
       title TEXT,
       media_type TEXT,
       tmdb_id INTEGER,
@@ -1248,6 +1405,14 @@ function initializeDatabase() {
       resolution TEXT
     )
   `);
+
+  // Add quarantine_path column if missing (migration)
+  try {
+    db.prepare(`SELECT quarantine_path FROM alternate_search_queue LIMIT 1`).get();
+  } catch (e) {
+    console.log('[MediaConverter] Adding quarantine_path column to alternate_search_queue table');
+    db.exec(`ALTER TABLE alternate_search_queue ADD COLUMN quarantine_path TEXT`);
+  }
 
   // Add duration column if missing (migration)
   try {
