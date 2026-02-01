@@ -45,7 +45,7 @@ export default function Navbar() {
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-2">
             <img
-              src="/flexerr-logo.png"
+              src="/flexerr-logo-icon.png"
               alt="Flexerr"
               className="h-9 w-9 object-contain"
             />

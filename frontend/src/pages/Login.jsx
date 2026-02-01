@@ -84,7 +84,7 @@ function Login() {
             <img
               src="/flexerr-logo.png"
               alt="Flexerr"
-              className="w-48 h-48 mx-auto object-contain"
+              className="w-64 h-64 mx-auto object-contain"
               onError={() => setLogoError(true)}
             />
           ) : (
