@@ -35,7 +35,7 @@ const NotificationService = require('./services/notifications');
 const Viper = require('./services/smart-episodes');
 
 const app = express();
-const PORT = process.env.PORT || 3100;
+const PORT = process.env.PORT || 5505;
 const JWT_SECRET = process.env.JWT_SECRET || 'flexerr-secret-change-me';
 
 // Track running rules for async execution
