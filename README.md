@@ -261,23 +261,25 @@ A household of 3 users watching "Breaking Bad" (62 episodes):
 
 | User | Watch Speed | Current Position |
 |------|-------------|------------------|
-| Dad | 3 eps/day (binger) | Season 4, Episode 8 |
-| Mom | 1 ep/day (steady) | Season 2, Episode 5 |
+| Dad | Finished | Season 5 Complete |
+| Mom | 1 ep/day | Season 2, Episode 5 |
 | Teen | Paused for 2 weeks | Season 1, Episode 3 |
 
-**What VIPER does:**
-- Episodes S1E01-S1E02 → Safe to clean (everyone's past them)
-- Episodes S1E03+ → Protected (Teen is still there)
-- Episodes S2E05+ → Protected (Mom hasn't reached them)
-- Episodes ahead of Dad → Kept available based on his velocity buffer
+**What VIPER keeps:**
+- S1E01-S1E02 → Cleaned (everyone's past them)
+- S1E03 + buffer ahead → Protected (Teen's bubble)
+- S2E05 + buffer ahead → Protected (Mom's bubble)
+- S2E06 through S5 → Cleaned (Dad's done, outside Mom's forward buffer)
+
+**The gap cleanup:** Episodes between Teen's bubble and Mom's bubble, and between Mom's bubble and the end, get cleaned. Only the bubbles around active viewers are preserved.
 
 **What happens next:**
-- Teen resumes watching, finishes S1 in a few days
-- Now S1E03-S1E10 become eligible for cleanup (Mom and Dad are past, Teen just finished)
-- Mom continues steady pace, her "bubble" of protected episodes moves forward with her
-- Storage is reclaimed gradually as the slowest user progresses
+- Teen resumes watching, finishes S1 → Teen's bubble moves forward
+- Gap between Teen and Mom shrinks, more episodes become cleanable behind Teen
+- Mom continues steady pace, her bubble moves forward with her
+- Storage is reclaimed gradually as bubbles move and gaps open up
 
-**The key insight:** Each user has an invisible bubble around their position. Content is only cleaned when it falls outside ALL users' bubbles.
+**The key insight:** Each user has an invisible bubble around their position. Content is only cleaned when it falls outside ALL users' bubbles. Large gaps between viewers get cleaned automatically.
 
 ## Media Protection
 
