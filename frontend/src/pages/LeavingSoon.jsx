@@ -388,7 +388,7 @@ export default function LeavingSoon() {
     }
   };
 
-  const protectItem = async (item) => {
+  const toggleProtection = async (item) => {
     if (!item.tmdb_id) {
       console.error('Cannot protect item without TMDB ID');
       return;
@@ -396,21 +396,20 @@ export default function LeavingSoon() {
     setProtecting(item.id);
     try {
       // Use manual protection API - this bypasses all rules
-      const mediaType = item.media_type === 'episode' ? 'tv' : item.media_type;
+      // Map show/episode -> tv for the API
+      const mediaType = (item.media_type === 'episode' || item.media_type === 'show') ? 'tv' : item.media_type;
       const res = await api.post(`/protection/${mediaType}/${item.tmdb_id}`, {
         title: item.title,
-        protect: true
+        protect: !item.isProtected  // Toggle protection
       });
-      if (res.data.protected) {
-        // Update item in list to show protected status
-        setItems(items.map(i =>
-          i.id === item.id
-            ? { ...i, isProtected: true, protectedBy: [...(i.protectedBy || []), user?.username || 'You'] }
-            : i
-        ));
-      }
+      // Update item in list
+      setItems(items.map(i =>
+        i.id === item.id
+          ? { ...i, isProtected: res.data.protected }
+          : i
+      ));
     } catch (err) {
-      console.error('Error protecting item:', err);
+      console.error('Error toggling protection:', err);
     } finally {
       setProtecting(null);
     }
@@ -576,25 +575,23 @@ export default function LeavingSoon() {
                           <BarChart3 className="h-4 w-4" />
                         </button>
                       )}
-                      {item.isProtected ? (
-                        <span className="inline-flex items-center space-x-1 px-3 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm">
-                          <Shield className="h-4 w-4 fill-current" />
-                          <span>Protected</span>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => protectItem(item)}
-                          disabled={protecting === item.id || !item.tmdb_id}
-                          className="inline-flex items-center space-x-1 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-sm transition-colors"
-                        >
-                          {protecting === item.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Shield className="h-4 w-4" />
-                          )}
-                          <span>Protect</span>
-                        </button>
-                      )}
+                      <button
+                        onClick={() => toggleProtection(item)}
+                        disabled={protecting === item.id || !item.tmdb_id}
+                        className={`inline-flex items-center space-x-1 px-3 py-2 rounded-lg text-sm transition-colors ${
+                          item.isProtected
+                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                        } disabled:opacity-50`}
+                        title={item.isProtected ? 'Click to remove protection' : 'Click to protect from cleanup'}
+                      >
+                        {protecting === item.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Shield className={`h-4 w-4 ${item.isProtected ? 'fill-current' : ''}`} />
+                        )}
+                        <span>{item.isProtected ? 'Protected' : 'Protect'}</span>
+                      </button>
                     </div>
                   </div>
 

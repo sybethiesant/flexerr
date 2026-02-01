@@ -5,7 +5,6 @@ import {
   Clock, Film, Tv, Loader2, CheckCircle, Download, XCircle,
   Filter, User
 } from 'lucide-react';
-import { RepairButton } from '../components/RepairButton';
 
 function StatusBadge({ status }) {
   const config = {
@@ -288,16 +287,8 @@ export default function Requests() {
                 </div>
               </div>
 
-              {/* Status & Repair */}
-              <div className="ml-4 flex-shrink-0 flex items-center space-x-2">
-                {request.status === 'available' && (
-                  <RepairButton
-                    tmdbId={request.tmdb_id}
-                    mediaType={request.media_type}
-                    title={request.title}
-                    size="small"
-                  />
-                )}
+              {/* Status */}
+              <div className="ml-4 flex-shrink-0">
                 <StatusBadge status={request.status} />
               </div>
             </Link>

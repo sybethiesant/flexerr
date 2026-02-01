@@ -70,35 +70,54 @@ function SeasonEpisodesModal({ isOpen, onClose, tmdbId, seasonNumber, showTitle,
     setLoading(true);
     setError(null);
     try {
-      // Fetch from Plex to get watch status
-      const res = await api.get(`/plex/episodes/${tmdbId}`, {
-        params: { season: seasonNumber }
-      });
-      const season = res.data.seasons.find(s => s.seasonNumber === seasonNumber);
+      // Always fetch from TMDB first to get full episode list
+      const tmdbRes = await api.get(`/discover/tv/${tmdbId}/season/${seasonNumber}`);
+      const tmdbEpisodes = tmdbRes.data.episodes?.map(ep => ({
+        episodeNumber: ep.episode_number,
+        title: ep.name,
+        summary: ep.overview,
+        thumb: ep.still_path,
+        airDate: ep.air_date,
+        runtime: ep.runtime,
+        fromTmdb: true
+      })) || [];
+
+      // Try to overlay Plex data for watch status and availability
+      let machineIdentifier = null;
+      try {
+        const plexRes = await api.get(`/plex/episodes/${tmdbId}`, {
+          params: { season: seasonNumber }
+        });
+        const plexSeason = plexRes.data.seasons?.find(s => s.seasonNumber === seasonNumber);
+        machineIdentifier = plexRes.data.machineIdentifier;
+
+        if (plexSeason?.episodes) {
+          // Merge Plex data into TMDB episodes
+          tmdbEpisodes.forEach(ep => {
+            const plexEp = plexSeason.episodes.find(p => p.episodeNumber === ep.episodeNumber);
+            if (plexEp) {
+              ep.ratingKey = plexEp.ratingKey;
+              ep.viewCount = plexEp.viewCount;
+              ep.lastViewedAt = plexEp.lastViewedAt;
+              ep.onPlex = true;
+              // Use Plex thumb if available
+              if (plexEp.thumb) ep.thumb = plexEp.thumb;
+            }
+          });
+        }
+      } catch (plexErr) {
+        // Plex data unavailable, continue with TMDB only
+        console.log('Plex data unavailable, showing TMDB episodes only');
+      }
+
       setSeasonData({
-        ...season,
-        machineIdentifier: res.data.machineIdentifier
+        seasonNumber,
+        title: `Season ${seasonNumber}`,
+        episodes: tmdbEpisodes,
+        machineIdentifier
       });
     } catch (e) {
-      // Fallback to TMDB data
-      try {
-        const tmdbRes = await api.get(`/discover/tv/${tmdbId}/season/${seasonNumber}`);
-        setSeasonData({
-          seasonNumber,
-          title: `Season ${seasonNumber}`,
-          episodes: tmdbRes.data.episodes?.map(ep => ({
-            episodeNumber: ep.episode_number,
-            title: ep.name,
-            summary: ep.overview,
-            thumb: ep.still_path,
-            airDate: ep.air_date,
-            runtime: ep.runtime
-          })) || [],
-          fromTmdb: true
-        });
-      } catch (e2) {
-        setError('Failed to load episodes');
-      }
+      setError('Failed to load episodes');
     } finally {
       setLoading(false);
     }
