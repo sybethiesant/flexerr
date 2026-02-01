@@ -8,7 +8,6 @@ class NotificationService {
   }
 
   // Map trigger names to database column names
-  // Note: DB columns are on_request, on_available, on_leaving_soon, on_delete, on_restore, on_error
   static triggerToColumn(trigger) {
     const mapping = {
       'on_request': 'on_request',
@@ -19,7 +18,11 @@ class NotificationService {
       'on_rule_complete': 'on_delete',       // Rule completion typically means deletion
       'on_error': 'on_error',
       'on_service_down': 'on_error',         // Service down is an error condition
-      'on_restore': 'on_restore'             // Explicit restore mapping
+      'on_restore': 'on_restore',            // Explicit restore mapping
+      'on_viper_cleanup': 'on_viper_cleanup',
+      'on_user_joined': 'on_user_joined',
+      'on_download_started': 'on_download_started',
+      'on_download_complete': 'on_download_complete'
     };
     return mapping[trigger] || trigger;
   }
@@ -118,7 +121,12 @@ class NotificationService {
       on_delete: 'Deleted',
       on_rule_complete: 'Rule Completed',
       on_error: 'Error',
-      on_service_down: 'Service Down'
+      on_service_down: 'Service Down',
+      on_restore: 'Restored',
+      on_viper_cleanup: 'VIPER Cleanup',
+      on_user_joined: 'New User Joined',
+      on_download_started: 'Download Started',
+      on_download_complete: 'Download Complete'
     };
 
     const colors = {
@@ -129,7 +137,12 @@ class NotificationService {
       on_delete: 0xef4444,    // Red
       on_rule_complete: 0x22c55e, // Green
       on_error: 0xdc2626,     // Dark red
-      on_service_down: 0x991b1b // Darker red
+      on_service_down: 0x991b1b, // Darker red
+      on_restore: 0x10b981,   // Emerald
+      on_viper_cleanup: 0x8b5cf6, // Purple
+      on_user_joined: 0x06b6d4, // Cyan
+      on_download_started: 0xf97316, // Orange
+      on_download_complete: 0x22c55e // Green
     };
 
     const embed = {
@@ -445,6 +458,51 @@ class NotificationService {
     await this.notify('on_service_down', {
       title: `${service} Connection Failed`,
       error: error.message || error
+    });
+  }
+
+  // Helper: Notify VIPER cleanup summary
+  static async notifyViperCleanup(summary) {
+    await this.notify('on_viper_cleanup', {
+      title: summary.title || 'VIPER Cleanup Complete',
+      message: summary.message,
+      details: summary.details,
+      type: summary.type || 'viper_cleanup',
+      stats: summary.stats
+    });
+  }
+
+  // Helper: Notify when new user joins
+  static async notifyUserJoined(user) {
+    await this.notify('on_user_joined', {
+      title: 'New User Joined',
+      message: `${user.username} has joined Flexerr`,
+      user: user.username,
+      mediaType: user.media_server_type || 'plex'
+    });
+  }
+
+  // Helper: Notify when download starts
+  static async notifyDownloadStarted(item) {
+    await this.notify('on_download_started', {
+      title: item.title,
+      year: item.year,
+      poster: item.poster_path || item.poster,
+      mediaType: item.media_type || item.mediaType,
+      action: 'Download Started',
+      user: item.requested_by
+    });
+  }
+
+  // Helper: Notify when download completes
+  static async notifyDownloadComplete(item) {
+    await this.notify('on_download_complete', {
+      title: item.title,
+      year: item.year,
+      poster: item.poster_path || item.poster,
+      mediaType: item.media_type || item.mediaType,
+      action: 'Download Complete',
+      user: item.requested_by
     });
   }
 }

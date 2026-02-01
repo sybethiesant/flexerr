@@ -5,7 +5,7 @@ import {
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
   ChevronDown, ChevronUp, HardDrive, Zap, Video, Play,
   CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink,
-  Search, X, Layers, Tv, Shield
+  Search, X, Layers, Tv, Shield, Bell, Send, MessageSquare, Mail, Globe, AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -511,6 +511,7 @@ function ServiceModal({ service, onSave, onClose, isNew = false }) {
 const SETTINGS_TABS = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'services', label: 'Services', icon: Server },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'viper', label: 'VIPER', icon: Zap },
   { id: 'media', label: 'Media Sync', icon: Tv },
   { id: 'cleanup', label: 'Cleanup', icon: Clock },
@@ -572,6 +573,13 @@ export default function SettingsPage() {
   const [invitations, setInvitations] = useState([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
 
+  // Webhooks/Notifications state
+  const [webhooks, setWebhooks] = useState([]);
+  const [loadingWebhooks, setLoadingWebhooks] = useState(false);
+  const [editingWebhook, setEditingWebhook] = useState(null);
+  const [addingWebhook, setAddingWebhook] = useState(false);
+  const [testingWebhook, setTestingWebhook] = useState(null);
+
   // Derive enabledProviders from settings synchronously (avoids useEffect timing gap)
   const enabledProviders = useMemo(() => {
     if (settings.discover_providers) {
@@ -601,6 +609,7 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchSettings();
     fetchServices();
+    fetchWebhooks();
     detectHardware();
     fetchPlexLibraries();
     fetchInvitations();
@@ -672,6 +681,76 @@ export default function SettingsPage() {
       // Silently fail - no invitations yet
     } finally {
       setLoadingInvitations(false);
+    }
+  };
+
+  const fetchWebhooks = async () => {
+    setLoadingWebhooks(true);
+    try {
+      const res = await api.get('/webhooks');
+      setWebhooks(res.data || []);
+    } catch (err) {
+      console.error('Failed to load webhooks:', err);
+    } finally {
+      setLoadingWebhooks(false);
+    }
+  };
+
+  const saveWebhook = async (webhookData) => {
+    try {
+      if (webhookData.id) {
+        await api.put(`/webhooks/${webhookData.id}`, webhookData);
+        toast.success('Webhook updated');
+      } else {
+        await api.post('/webhooks', webhookData);
+        toast.success('Webhook added');
+      }
+      fetchWebhooks();
+      setEditingWebhook(null);
+      setAddingWebhook(false);
+    } catch (err) {
+      console.error('Failed to save webhook:', err);
+      toast.error(err.response?.data?.error || 'Failed to save webhook');
+    }
+  };
+
+  const deleteWebhook = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this webhook?')) return;
+    try {
+      await api.delete(`/webhooks/${id}`);
+      toast.success('Webhook deleted');
+      fetchWebhooks();
+    } catch (err) {
+      console.error('Failed to delete webhook:', err);
+      toast.error('Failed to delete webhook');
+    }
+  };
+
+  const testWebhook = async (webhook) => {
+    setTestingWebhook(webhook.id || 'new');
+    try {
+      if (webhook.id) {
+        await api.post(`/webhooks/${webhook.id}/test`);
+      } else {
+        await api.post('/webhooks/test', webhook);
+      }
+      toast.success('Test notification sent!');
+    } catch (err) {
+      console.error('Failed to test webhook:', err);
+      toast.error(err.response?.data?.error || 'Failed to send test notification');
+    } finally {
+      setTestingWebhook(null);
+    }
+  };
+
+  const toggleWebhookActive = async (webhook) => {
+    try {
+      await api.put(`/webhooks/${webhook.id}`, { is_active: !webhook.is_active });
+      toast.success(webhook.is_active ? 'Webhook disabled' : 'Webhook enabled');
+      fetchWebhooks();
+    } catch (err) {
+      console.error('Failed to toggle webhook:', err);
+      toast.error('Failed to update webhook');
     }
   };
 
@@ -2279,12 +2358,506 @@ export default function SettingsPage() {
     </div>
   );
 
+  // Webhook type configuration
+  const WEBHOOK_TYPES = [
+    { value: 'discord', label: 'Discord', icon: MessageSquare, color: 'bg-indigo-500' },
+    { value: 'slack', label: 'Slack', icon: MessageSquare, color: 'bg-green-500' },
+    { value: 'gotify', label: 'Gotify', icon: Bell, color: 'bg-blue-500' },
+    { value: 'pushover', label: 'Pushover', icon: Send, color: 'bg-cyan-500' },
+    { value: 'ntfy', label: 'ntfy', icon: Bell, color: 'bg-purple-500' },
+    { value: 'email', label: 'Email', icon: Mail, color: 'bg-red-500' },
+    { value: 'custom', label: 'Custom Webhook', icon: Globe, color: 'bg-slate-500' },
+  ];
+
+  // Webhook trigger configuration
+  const WEBHOOK_TRIGGERS = [
+    { group: 'Media Events', triggers: [
+      { key: 'on_request', label: 'New Request', description: 'When content is added to watchlist', defaultOn: true },
+      { key: 'on_available', label: 'Now Available', description: 'When content becomes available in Plex/Jellyfin', defaultOn: true },
+      { key: 'on_download_started', label: 'Download Started', description: 'When Radarr/Sonarr starts downloading', defaultOn: false },
+      { key: 'on_download_complete', label: 'Download Complete', description: 'When download finishes', defaultOn: true },
+    ]},
+    { group: 'Cleanup Events', triggers: [
+      { key: 'on_leaving_soon', label: 'Leaving Soon', description: 'When content enters the leaving soon queue', defaultOn: true },
+      { key: 'on_delete', label: 'Content Deleted', description: 'When content is deleted from library', defaultOn: true },
+      { key: 'on_restore', label: 'Content Restored', description: 'When deleted content is restored', defaultOn: true },
+      { key: 'on_viper_cleanup', label: 'VIPER Summary', description: 'Daily VIPER cleanup summary report', defaultOn: true },
+    ]},
+    { group: 'System Events', triggers: [
+      { key: 'on_error', label: 'System Errors', description: 'When errors occur in Flexerr', defaultOn: true },
+      { key: 'on_user_joined', label: 'New User Joined', description: 'When a new user registers', defaultOn: false },
+    ]},
+  ];
+
+  const WebhookModal = ({ webhook, onSave, onClose }) => {
+    const [formData, setFormData] = useState({
+      type: webhook?.type || 'discord',
+      name: webhook?.name || '',
+      url: webhook?.url || '',
+      settings: webhook?.settings || {},
+      is_active: webhook?.is_active !== false,
+      on_request: webhook?.on_request ?? true,
+      on_available: webhook?.on_available ?? true,
+      on_leaving_soon: webhook?.on_leaving_soon ?? true,
+      on_delete: webhook?.on_delete ?? true,
+      on_restore: webhook?.on_restore ?? true,
+      on_error: webhook?.on_error ?? true,
+      on_viper_cleanup: webhook?.on_viper_cleanup ?? true,
+      on_user_joined: webhook?.on_user_joined ?? false,
+      on_download_started: webhook?.on_download_started ?? false,
+      on_download_complete: webhook?.on_download_complete ?? true,
+    });
+
+    const selectedType = WEBHOOK_TYPES.find(t => t.value === formData.type);
+
+    const updateSettings = (key, value) => {
+      setFormData(prev => ({
+        ...prev,
+        settings: { ...prev.settings, [key]: value }
+      }));
+    };
+
+    const handleSubmit = () => {
+      if (!formData.name.trim()) {
+        toast.error('Name is required');
+        return;
+      }
+      if (!formData.url.trim()) {
+        toast.error('URL is required');
+        return;
+      }
+      onSave({ ...formData, id: webhook?.id });
+    };
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between p-4 border-b border-slate-700">
+            <h2 className="text-lg font-semibold text-white">
+              {webhook?.id ? 'Edit Webhook' : 'Add Webhook'}
+            </h2>
+            <button onClick={onClose} className="text-slate-400 hover:text-white">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Type Selection */}
+            <div>
+              <label className="block text-sm font-medium text-white mb-2">Type</label>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {WEBHOOK_TYPES.map(type => {
+                  const Icon = type.icon;
+                  return (
+                    <button
+                      key={type.value}
+                      onClick={() => setFormData(prev => ({ ...prev, type: type.value }))}
+                      className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-all ${
+                        formData.type === type.value
+                          ? 'border-primary-500 bg-primary-500/20'
+                          : 'border-slate-600 hover:border-slate-500 bg-slate-700/50'
+                      }`}
+                    >
+                      <div className={`p-2 rounded-lg ${type.color}`}>
+                        <Icon className="h-4 w-4 text-white" />
+                      </div>
+                      <span className="text-xs text-white">{type.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Basic Fields */}
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-white mb-1">Name</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="My Discord Server"
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-white mb-1">Webhook URL</label>
+                <input
+                  type="text"
+                  value={formData.url}
+                  onChange={(e) => setFormData(prev => ({ ...prev, url: e.target.value }))}
+                  placeholder={
+                    formData.type === 'discord' ? 'https://discord.com/api/webhooks/...' :
+                    formData.type === 'slack' ? 'https://hooks.slack.com/services/...' :
+                    formData.type === 'gotify' ? 'https://gotify.example.com' :
+                    formData.type === 'ntfy' ? 'https://ntfy.sh/your-topic' :
+                    'https://...'
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+
+            {/* Type-specific settings */}
+            {formData.type === 'discord' && (
+              <div className="p-3 bg-slate-700/50 rounded-lg space-y-3">
+                <h4 className="text-sm font-medium text-slate-300">Discord Settings</h4>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Bot Username (optional)</label>
+                  <input
+                    type="text"
+                    value={formData.settings.username || ''}
+                    onChange={(e) => updateSettings('username', e.target.value)}
+                    placeholder="Flexerr"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {formData.type === 'gotify' && (
+              <div className="p-3 bg-slate-700/50 rounded-lg space-y-3">
+                <h4 className="text-sm font-medium text-slate-300">Gotify Settings</h4>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Application Token</label>
+                  <input
+                    type="text"
+                    value={formData.settings.token || ''}
+                    onChange={(e) => updateSettings('token', e.target.value)}
+                    placeholder="AxxxxxxxxxxxxxxxxA"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {formData.type === 'pushover' && (
+              <div className="p-3 bg-slate-700/50 rounded-lg space-y-3">
+                <h4 className="text-sm font-medium text-slate-300">Pushover Settings</h4>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">User Key</label>
+                  <input
+                    type="text"
+                    value={formData.settings.userKey || ''}
+                    onChange={(e) => updateSettings('userKey', e.target.value)}
+                    placeholder="Your Pushover User Key"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">API Token</label>
+                  <input
+                    type="text"
+                    value={formData.settings.apiToken || ''}
+                    onChange={(e) => updateSettings('apiToken', e.target.value)}
+                    placeholder="Your Pushover API Token"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {formData.type === 'email' && (
+              <div className="p-3 bg-slate-700/50 rounded-lg space-y-3">
+                <h4 className="text-sm font-medium text-slate-300">Email Settings</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">SMTP Host</label>
+                    <input
+                      type="text"
+                      value={formData.settings.smtpHost || ''}
+                      onChange={(e) => updateSettings('smtpHost', e.target.value)}
+                      placeholder="smtp.gmail.com"
+                      className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Port</label>
+                    <input
+                      type="number"
+                      value={formData.settings.smtpPort || ''}
+                      onChange={(e) => updateSettings('smtpPort', e.target.value)}
+                      placeholder="587"
+                      className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">From Email</label>
+                  <input
+                    type="email"
+                    value={formData.settings.fromEmail || ''}
+                    onChange={(e) => updateSettings('fromEmail', e.target.value)}
+                    placeholder="flexerr@example.com"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">To Email(s)</label>
+                  <input
+                    type="text"
+                    value={formData.settings.toEmail || ''}
+                    onChange={(e) => updateSettings('toEmail', e.target.value)}
+                    placeholder="admin@example.com (comma-separated for multiple)"
+                    className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={formData.settings.smtpUser || ''}
+                      onChange={(e) => updateSettings('smtpUser', e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Password</label>
+                    <input
+                      type="password"
+                      value={formData.settings.smtpPass || ''}
+                      onChange={(e) => updateSettings('smtpPass', e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-600 border border-slate-500 rounded-lg text-white text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Notification Triggers */}
+            <div>
+              <h4 className="text-sm font-medium text-white mb-3">Notification Triggers</h4>
+              <div className="space-y-4">
+                {WEBHOOK_TRIGGERS.map(group => (
+                  <div key={group.group} className="p-3 bg-slate-700/50 rounded-lg">
+                    <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">{group.group}</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {group.triggers.map(trigger => (
+                        <label key={trigger.key} className="flex items-start gap-2 cursor-pointer p-2 rounded hover:bg-slate-600/50">
+                          <input
+                            type="checkbox"
+                            checked={formData[trigger.key]}
+                            onChange={(e) => setFormData(prev => ({ ...prev, [trigger.key]: e.target.checked }))}
+                            className="mt-0.5 rounded border-slate-500 bg-slate-600 text-primary-500 focus:ring-primary-500"
+                          />
+                          <div>
+                            <div className="text-sm text-white">{trigger.label}</div>
+                            <div className="text-xs text-slate-400">{trigger.description}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between p-4 border-t border-slate-700">
+            <button
+              onClick={() => testWebhook(formData)}
+              disabled={!formData.url || testingWebhook === 'new'}
+              className="btn btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
+              {testingWebhook === 'new' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              Test Webhook
+            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={onClose} className="btn btn-secondary">Cancel</button>
+              <button onClick={handleSubmit} className="btn btn-primary">
+                {webhook?.id ? 'Update' : 'Add'} Webhook
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderNotificationsTab = () => (
+    <div className="space-y-6">
+      {/* Info Banner */}
+      <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 flex items-start gap-3">
+        <Bell className="h-5 w-5 text-blue-400 flex-shrink-0 mt-0.5" />
+        <div>
+          <h3 className="font-medium text-blue-400">Webhook Notifications</h3>
+          <p className="text-sm text-slate-400 mt-1">
+            Configure webhooks to receive notifications about media requests, availability changes, cleanup events, and system alerts.
+            Flexerr handles all notifications natively - no need to configure webhooks in Radarr, Sonarr, or other services.
+          </p>
+        </div>
+      </div>
+
+      {/* Webhooks List */}
+      <SettingSection title="Configured Webhooks" icon={Bell}>
+        {loadingWebhooks ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-primary-400" />
+          </div>
+        ) : webhooks.length === 0 ? (
+          <div className="text-center py-8">
+            <Bell className="h-12 w-12 text-slate-600 mx-auto mb-3" />
+            <p className="text-slate-400 mb-4">No webhooks configured yet</p>
+            <button
+              onClick={() => setAddingWebhook(true)}
+              className="btn btn-primary flex items-center gap-2 mx-auto"
+            >
+              <Plus className="h-4 w-4" />
+              Add Your First Webhook
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {webhooks.map(webhook => {
+              const typeConfig = WEBHOOK_TYPES.find(t => t.value === webhook.type) || WEBHOOK_TYPES[6];
+              const TypeIcon = typeConfig.icon;
+              const enabledTriggers = WEBHOOK_TRIGGERS
+                .flatMap(g => g.triggers)
+                .filter(t => webhook[t.key])
+                .map(t => t.label);
+
+              return (
+                <div
+                  key={webhook.id}
+                  className={`p-4 rounded-lg border transition-all ${
+                    webhook.is_active
+                      ? 'bg-slate-700/50 border-slate-600'
+                      : 'bg-slate-800/50 border-slate-700 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className={`p-2 rounded-lg ${typeConfig.color}`}>
+                        <TypeIcon className="h-4 w-4 text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-medium text-white truncate">{webhook.name}</h4>
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${
+                            webhook.is_active
+                              ? 'bg-green-500/20 text-green-400'
+                              : 'bg-slate-600 text-slate-400'
+                          }`}>
+                            {webhook.is_active ? 'Active' : 'Disabled'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 truncate mt-0.5">{webhook.url}</p>
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {enabledTriggers.slice(0, 5).map(trigger => (
+                            <span key={trigger} className="px-2 py-0.5 bg-slate-600 text-xs text-slate-300 rounded">
+                              {trigger}
+                            </span>
+                          ))}
+                          {enabledTriggers.length > 5 && (
+                            <span className="px-2 py-0.5 bg-slate-600 text-xs text-slate-300 rounded">
+                              +{enabledTriggers.length - 5} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => toggleWebhookActive(webhook)}
+                        className={`p-2 rounded-lg transition-colors ${
+                          webhook.is_active
+                            ? 'text-green-400 hover:bg-green-500/20'
+                            : 'text-slate-400 hover:bg-slate-600'
+                        }`}
+                        title={webhook.is_active ? 'Disable' : 'Enable'}
+                      >
+                        {webhook.is_active ? <CheckCircle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                      </button>
+                      <button
+                        onClick={() => testWebhook(webhook)}
+                        disabled={testingWebhook === webhook.id}
+                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-600 rounded-lg transition-colors disabled:opacity-50"
+                        title="Test Webhook"
+                      >
+                        {testingWebhook === webhook.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setEditingWebhook(webhook)}
+                        className="p-2 text-slate-400 hover:text-white hover:bg-slate-600 rounded-lg transition-colors"
+                        title="Edit"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteWebhook(webhook.id)}
+                        className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/20 rounded-lg transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <button
+              onClick={() => setAddingWebhook(true)}
+              className="w-full p-3 border-2 border-dashed border-slate-600 rounded-lg text-slate-400 hover:text-white hover:border-primary-500 transition-colors flex items-center justify-center gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              Add Webhook
+            </button>
+          </div>
+        )}
+      </SettingSection>
+
+      {/* Trigger Reference */}
+      <SettingSection title="Trigger Reference" icon={AlertTriangle} collapsible defaultOpen={false}>
+        <div className="space-y-4">
+          {WEBHOOK_TRIGGERS.map(group => (
+            <div key={group.group}>
+              <h4 className="text-sm font-semibold text-slate-300 mb-2">{group.group}</h4>
+              <div className="space-y-1">
+                {group.triggers.map(trigger => (
+                  <div key={trigger.key} className="flex items-center justify-between py-1.5 px-2 bg-slate-700/30 rounded">
+                    <span className="text-sm text-white">{trigger.label}</span>
+                    <span className="text-xs text-slate-400">{trigger.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </SettingSection>
+
+      {/* Webhook Modal */}
+      {(editingWebhook || addingWebhook) && (
+        <WebhookModal
+          webhook={editingWebhook}
+          onSave={saveWebhook}
+          onClose={() => {
+            setEditingWebhook(null);
+            setAddingWebhook(false);
+          }}
+        />
+      )}
+    </div>
+  );
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'general':
         return renderGeneralTab();
       case 'services':
         return renderServicesTab();
+      case 'notifications':
+        return renderNotificationsTab();
       case 'viper':
         return renderViperTab();
       case 'media':

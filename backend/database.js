@@ -1125,6 +1125,32 @@ const runMigrations = () => {
   }
 
   console.log('[Database] Categorization rules table initialized');
+
+  // =====================================================
+  // Migration: Add new webhook trigger columns
+  // =====================================================
+  const webhookColumns = db.prepare("PRAGMA table_info(webhooks)").all();
+  const webhookColumnNames = webhookColumns.map(c => c.name);
+
+  if (!webhookColumnNames.includes('on_viper_cleanup')) {
+    db.exec("ALTER TABLE webhooks ADD COLUMN on_viper_cleanup BOOLEAN DEFAULT 1");
+    console.log('[Database] Added on_viper_cleanup column to webhooks table');
+  }
+
+  if (!webhookColumnNames.includes('on_user_joined')) {
+    db.exec("ALTER TABLE webhooks ADD COLUMN on_user_joined BOOLEAN DEFAULT 0");
+    console.log('[Database] Added on_user_joined column to webhooks table');
+  }
+
+  if (!webhookColumnNames.includes('on_download_started')) {
+    db.exec("ALTER TABLE webhooks ADD COLUMN on_download_started BOOLEAN DEFAULT 0");
+    console.log('[Database] Added on_download_started column to webhooks table');
+  }
+
+  if (!webhookColumnNames.includes('on_download_complete')) {
+    db.exec("ALTER TABLE webhooks ADD COLUMN on_download_complete BOOLEAN DEFAULT 1");
+    console.log('[Database] Added on_download_complete column to webhooks table');
+  }
 };
 
 // Helper functions
