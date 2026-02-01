@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://hub.docker.com/r/sybersects/flexerr"><img src="https://img.shields.io/docker/pulls/sybersects/flexerr?style=flat-square&logo=docker" alt="Docker Pulls"></a>
   <a href="https://hub.docker.com/r/sybersects/flexerr"><img src="https://img.shields.io/docker/v/sybersects/flexerr?style=flat-square&logo=docker&label=version" alt="Docker Version"></a>
-  <a href="https://github.com/sybersects/flexerr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/sybersects/flexerr?style=flat-square" alt="License"></a>
+  <a href="https://github.com/sybethiesant/flexerr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/sybethiesant/flexerr?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
