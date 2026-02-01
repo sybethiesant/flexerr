@@ -4608,6 +4608,372 @@ app.get('/api/quality/summary', authenticate, requireAdmin, async (req, res) => 
 });
 
 // =========================
+// CATEGORIZATION RULES
+// =========================
+
+const CategorizationEngine = require('./services/categorization-engine');
+
+// Get all categorization rules
+app.get('/api/categorization', authenticate, requireAdmin, (req, res) => {
+  try {
+    const rules = db.prepare(`
+      SELECT * FROM categorization_rules
+      ORDER BY priority DESC, id ASC
+    `).all();
+
+    // Parse JSON fields
+    const parsed = rules.map(rule => ({
+      ...rule,
+      conditions: JSON.parse(rule.conditions || '{"operator":"AND","conditions":[]}'),
+      radarr_tags: JSON.parse(rule.radarr_tags || '[]'),
+      sonarr_tags: JSON.parse(rule.sonarr_tags || '[]')
+    }));
+
+    res.json(parsed);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single categorization rule
+app.get('/api/categorization/:id', authenticate, requireAdmin, (req, res) => {
+  try {
+    const rule = db.prepare('SELECT * FROM categorization_rules WHERE id = ?').get(req.params.id);
+
+    if (!rule) {
+      return res.status(404).json({ error: 'Rule not found' });
+    }
+
+    res.json({
+      ...rule,
+      conditions: JSON.parse(rule.conditions || '{"operator":"AND","conditions":[]}'),
+      radarr_tags: JSON.parse(rule.radarr_tags || '[]'),
+      sonarr_tags: JSON.parse(rule.sonarr_tags || '[]')
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create categorization rule
+app.post('/api/categorization', authenticate, requireAdmin, (req, res) => {
+  try {
+    const {
+      name, description, target_type, conditions,
+      mode, collection_name,
+      radarr_root_folder, radarr_quality_profile_id, radarr_tags,
+      sonarr_root_folder, sonarr_quality_profile_id, sonarr_tags,
+      priority, is_active
+    } = req.body;
+
+    if (!name || !target_type) {
+      return res.status(400).json({ error: 'Name and target_type are required' });
+    }
+
+    // Validate collection mode has collection_name
+    if (mode === 'collection' && !collection_name) {
+      return res.status(400).json({ error: 'Collection name is required for collection mode' });
+    }
+
+    const result = db.prepare(`
+      INSERT INTO categorization_rules (
+        name, description, target_type, conditions,
+        mode, collection_name,
+        radarr_root_folder, radarr_quality_profile_id, radarr_tags,
+        sonarr_root_folder, sonarr_quality_profile_id, sonarr_tags,
+        priority, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      name,
+      description || null,
+      target_type,
+      JSON.stringify(conditions || { operator: 'AND', conditions: [] }),
+      mode || 'collection',
+      collection_name || null,
+      radarr_root_folder || null,
+      radarr_quality_profile_id || null,
+      JSON.stringify(radarr_tags || []),
+      sonarr_root_folder || null,
+      sonarr_quality_profile_id || null,
+      JSON.stringify(sonarr_tags || []),
+      priority || 0,
+      is_active !== false ? 1 : 0
+    );
+
+    CategorizationEngine.clearCache();
+
+    log('info', 'categorization', 'Rule created', {
+      user_id: req.user.id,
+      details: { ruleId: result.lastInsertRowid, name, mode: mode || 'collection' }
+    });
+
+    res.json({ id: result.lastInsertRowid, message: 'Rule created' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update categorization rule
+app.put('/api/categorization/:id', authenticate, requireAdmin, (req, res) => {
+  try {
+    const {
+      name, description, target_type, conditions,
+      mode, collection_name,
+      radarr_root_folder, radarr_quality_profile_id, radarr_tags,
+      sonarr_root_folder, sonarr_quality_profile_id, sonarr_tags,
+      priority, is_active
+    } = req.body;
+
+    const existing = db.prepare('SELECT * FROM categorization_rules WHERE id = ?').get(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Rule not found' });
+    }
+
+    // Validate collection mode has collection_name
+    const newMode = mode !== undefined ? mode : existing.mode;
+    const newCollectionName = collection_name !== undefined ? collection_name : existing.collection_name;
+    if (newMode === 'collection' && !newCollectionName) {
+      return res.status(400).json({ error: 'Collection name is required for collection mode' });
+    }
+
+    db.prepare(`
+      UPDATE categorization_rules SET
+        name = ?, description = ?, target_type = ?, conditions = ?,
+        mode = ?, collection_name = ?,
+        radarr_root_folder = ?, radarr_quality_profile_id = ?, radarr_tags = ?,
+        sonarr_root_folder = ?, sonarr_quality_profile_id = ?, sonarr_tags = ?,
+        priority = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name || existing.name,
+      description !== undefined ? description : existing.description,
+      target_type || existing.target_type,
+      conditions ? JSON.stringify(conditions) : existing.conditions,
+      newMode || 'collection',
+      newCollectionName,
+      radarr_root_folder !== undefined ? radarr_root_folder : existing.radarr_root_folder,
+      radarr_quality_profile_id !== undefined ? radarr_quality_profile_id : existing.radarr_quality_profile_id,
+      radarr_tags ? JSON.stringify(radarr_tags) : existing.radarr_tags,
+      sonarr_root_folder !== undefined ? sonarr_root_folder : existing.sonarr_root_folder,
+      sonarr_quality_profile_id !== undefined ? sonarr_quality_profile_id : existing.sonarr_quality_profile_id,
+      sonarr_tags ? JSON.stringify(sonarr_tags) : existing.sonarr_tags,
+      priority !== undefined ? priority : existing.priority,
+      is_active !== undefined ? (is_active ? 1 : 0) : existing.is_active,
+      req.params.id
+    );
+
+    CategorizationEngine.clearCache();
+
+    res.json({ message: 'Rule updated' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete categorization rule
+app.delete('/api/categorization/:id', authenticate, requireAdmin, (req, res) => {
+  try {
+    const rule = db.prepare('SELECT * FROM categorization_rules WHERE id = ?').get(req.params.id);
+    if (!rule) {
+      return res.status(404).json({ error: 'Rule not found' });
+    }
+
+    db.prepare('DELETE FROM categorization_rules WHERE id = ?').run(req.params.id);
+    CategorizationEngine.clearCache();
+
+    log('info', 'categorization', 'Rule deleted', {
+      user_id: req.user.id,
+      details: { ruleId: req.params.id, name: rule.name }
+    });
+
+    res.json({ message: 'Rule deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available root folders and quality profiles from Radarr/Sonarr
+app.get('/api/categorization/options', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const options = {
+      radarr: { rootFolders: [], qualityProfiles: [], tags: [] },
+      sonarr: { rootFolders: [], qualityProfiles: [], tags: [] }
+    };
+
+    // Get Radarr options
+    const radarrService = db.prepare("SELECT * FROM services WHERE type = 'radarr' AND is_active = 1").get();
+    if (radarrService) {
+      const RadarrService = require('./services/radarr');
+      const radarr = new RadarrService(radarrService.url, radarrService.api_key);
+
+      try {
+        options.radarr.rootFolders = await radarr.getRootFolders();
+        options.radarr.qualityProfiles = await radarr.getQualityProfiles();
+        options.radarr.tags = await radarr.getTags();
+      } catch (e) {
+        console.error('[Categorization] Error fetching Radarr options:', e.message);
+      }
+    }
+
+    // Get Sonarr options
+    const sonarrService = db.prepare("SELECT * FROM services WHERE type = 'sonarr' AND is_active = 1").get();
+    if (sonarrService) {
+      const SonarrService = require('./services/sonarr');
+      const sonarr = new SonarrService(sonarrService.url, sonarrService.api_key);
+
+      try {
+        options.sonarr.rootFolders = await sonarr.getRootFolders();
+        options.sonarr.qualityProfiles = await sonarr.getQualityProfiles();
+        options.sonarr.tags = await sonarr.getTags();
+      } catch (e) {
+        console.error('[Categorization] Error fetching Sonarr options:', e.message);
+      }
+    }
+
+    res.json(options);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new root folder in Radarr or Sonarr
+app.post('/api/categorization/rootfolder', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { path, service } = req.body;
+
+    if (!path || !service) {
+      return res.status(400).json({ error: 'Path and service (radarr/sonarr) are required' });
+    }
+
+    if (!['radarr', 'sonarr'].includes(service)) {
+      return res.status(400).json({ error: 'Service must be radarr or sonarr' });
+    }
+
+    const serviceConfig = db.prepare(`SELECT * FROM services WHERE type = ? AND is_active = 1`).get(service);
+    if (!serviceConfig) {
+      return res.status(400).json({ error: `${service} is not configured` });
+    }
+
+    let result;
+    if (service === 'radarr') {
+      const RadarrService = require('./services/radarr');
+      const radarr = new RadarrService(serviceConfig.url, serviceConfig.api_key);
+      result = await radarr.addRootFolder(path);
+    } else {
+      const SonarrService = require('./services/sonarr');
+      const sonarr = new SonarrService(serviceConfig.url, serviceConfig.api_key);
+      result = await sonarr.addRootFolder(path);
+    }
+
+    log('info', 'categorization', 'Root folder created', {
+      user_id: req.user.id,
+      details: { service, path }
+    });
+
+    res.json({ success: true, rootFolder: result });
+  } catch (error) {
+    console.error('[Categorization] Error creating root folder:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Analyze library for categorization changes
+app.get('/api/categorization/analyze', authenticate, requireAdmin, async (req, res) => {
+  try {
+    let radarr = null;
+    let sonarr = null;
+
+    const radarrService = db.prepare("SELECT * FROM services WHERE type = 'radarr' AND is_active = 1").get();
+    if (radarrService) {
+      const RadarrService = require('./services/radarr');
+      radarr = new RadarrService(radarrService.url, radarrService.api_key);
+    }
+
+    const sonarrService = db.prepare("SELECT * FROM services WHERE type = 'sonarr' AND is_active = 1").get();
+    if (sonarrService) {
+      const SonarrService = require('./services/sonarr');
+      sonarr = new SonarrService(sonarrService.url, sonarrService.api_key);
+    }
+
+    const analysis = await CategorizationEngine.analyzeLibrary(radarr, sonarr);
+    res.json(analysis);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Apply categorization to selected items
+app.post('/api/categorization/apply', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { movies, shows } = req.body;
+
+    let radarr = null;
+    let sonarr = null;
+
+    const radarrService = db.prepare("SELECT * FROM services WHERE type = 'radarr' AND is_active = 1").get();
+    if (radarrService) {
+      const RadarrService = require('./services/radarr');
+      radarr = new RadarrService(radarrService.url, radarrService.api_key);
+    }
+
+    const sonarrService = db.prepare("SELECT * FROM services WHERE type = 'sonarr' AND is_active = 1").get();
+    if (sonarrService) {
+      const SonarrService = require('./services/sonarr');
+      sonarr = new SonarrService(sonarrService.url, sonarrService.api_key);
+    }
+
+    const results = await CategorizationEngine.applyToExisting(radarr, sonarr, { movies, shows });
+
+    log('info', 'categorization', 'Applied categorization', {
+      user_id: req.user.id,
+      details: {
+        moviesSuccess: results.success.filter(r => r.type === 'movie').length,
+        showsSuccess: results.success.filter(r => r.type === 'show').length,
+        failed: results.failed.length
+      }
+    });
+
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync all collection-mode categorization rules to Plex
+app.post('/api/categorization/sync-all', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const CollectionSync = require('./services/collection-sync');
+    const results = await CollectionSync.syncAllCollections();
+    res.json(results);
+  } catch (error) {
+    console.error('[Categorization] Collection sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync a single collection-mode rule to Plex
+app.post('/api/categorization/:id/sync', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const CollectionSync = require('./services/collection-sync');
+    const results = await CollectionSync.syncRule(parseInt(req.params.id));
+    res.json(results);
+  } catch (error) {
+    console.error('[Categorization] Rule sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get collection sync status
+app.get('/api/categorization/sync-status', authenticate, requireAdmin, (req, res) => {
+  try {
+    const CollectionSync = require('./services/collection-sync');
+    res.json(CollectionSync.getSyncStatus());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =========================
 // HEALTH CHECK
 // =========================
 
@@ -4640,5 +5006,26 @@ app.listen(PORT, () => {
     scheduler.start().catch(err => {
       console.error('[Scheduler] Failed to start:', err.message);
     });
+
+    // Start collection sync scheduler (every 30 minutes)
+    const CollectionSync = require('./services/collection-sync');
+    setInterval(async () => {
+      try {
+        console.log('[CollectionSync] Running scheduled sync...');
+        await CollectionSync.syncAllCollections();
+      } catch (err) {
+        console.error('[CollectionSync] Scheduled sync error:', err.message);
+      }
+    }, 30 * 60 * 1000); // 30 minutes
+
+    // Run initial collection sync after 2 minutes (let everything else start first)
+    setTimeout(async () => {
+      try {
+        console.log('[CollectionSync] Running initial sync...');
+        await CollectionSync.syncAllCollections();
+      } catch (err) {
+        console.error('[CollectionSync] Initial sync error:', err.message);
+      }
+    }, 2 * 60 * 1000); // 2 minutes after startup
   }
 });

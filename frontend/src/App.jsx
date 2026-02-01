@@ -13,6 +13,8 @@ import Logs from './pages/Logs';
 import Users from './pages/Users';
 import Rules from './pages/Rules';
 import RuleEditor from './pages/RuleEditor';
+import Categorization from './pages/Categorization';
+import CategorizationEditor from './pages/CategorizationEditor';
 import Collections from './pages/Collections';
 import LeavingSoon from './pages/LeavingSoon';
 import Setup from './pages/Setup';
@@ -377,6 +379,30 @@ function AppRoutes() {
         element={
           <ProtectedRoute adminOnly>
             <MainLayout showSearch={false}><AdminLayout><RuleEditor /></AdminLayout></MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/categorization"
+        element={
+          <ProtectedRoute adminOnly>
+            <MainLayout showSearch={false}><AdminLayout><Categorization /></AdminLayout></MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/categorization/new"
+        element={
+          <ProtectedRoute adminOnly>
+            <MainLayout showSearch={false}><AdminLayout><CategorizationEditor /></AdminLayout></MainLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/categorization/:id"
+        element={
+          <ProtectedRoute adminOnly>
+            <MainLayout showSearch={false}><AdminLayout><CategorizationEditor /></AdminLayout></MainLayout>
           </ProtectedRoute>
         }
       />

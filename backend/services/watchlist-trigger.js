@@ -11,6 +11,8 @@ const RadarrService = require('./radarr');
 const PlexService = require('./plex');
 const NotificationService = require('./notifications');
 const JellyfinMediaServer = require('./media-server/jellyfin-media-server');
+const CategorizationEngine = require('./categorization-engine');
+const CollectionSync = require('./collection-sync');
 
 class WatchlistTriggerService {
   constructor() {
@@ -378,16 +380,69 @@ class WatchlistTriggerService {
         return { success: false, error: 'Radarr not properly configured' };
       }
 
-      // Add to Radarr
+      // Evaluate categorization rules to determine root folder and quality profile
+      // Only library-mode rules affect root folder placement
+      let rootFolder = rootFolders[0].path;
+      let qualityProfileId = qualityProfiles[0].id;
+      let categorizationResult = null;
+
+      try {
+        // Get library-mode rule for root folder placement
+        categorizationResult = CategorizationEngine.evaluateLibraryRule(details, 'movie');
+        if (categorizationResult) {
+          // Use categorization rule settings if they exist
+          if (categorizationResult.rootFolder) {
+            // Validate the root folder exists
+            const validFolder = rootFolders.find(f => f.path === categorizationResult.rootFolder);
+            if (validFolder) {
+              rootFolder = categorizationResult.rootFolder;
+              console.log(`[WatchlistTrigger] Categorization: Using root folder "${rootFolder}" for "${details.title}"`);
+            }
+          }
+          if (categorizationResult.qualityProfileId) {
+            // Validate the quality profile exists
+            const validProfile = qualityProfiles.find(p => p.id === categorizationResult.qualityProfileId);
+            if (validProfile) {
+              qualityProfileId = categorizationResult.qualityProfileId;
+              console.log(`[WatchlistTrigger] Categorization: Using quality profile "${validProfile.name}" for "${details.title}"`);
+            }
+          }
+        }
+      } catch (catError) {
+        console.error('[WatchlistTrigger] Categorization evaluation error:', catError);
+        // Continue with defaults
+      }
+
+      // Add to Radarr with determined settings
       const result = await this.radarr.addMovie(
         tmdbId,
-        qualityProfiles[0].id,
-        rootFolders[0].path,
+        qualityProfileId,
+        rootFolder,
         true,  // monitored
         true   // searchNow
       );
 
-      return { success: true, radarrId: result.id };
+      // Check for collection-mode rules and queue collection updates
+      // Collections will be synced once the item appears in Plex
+      try {
+        const collectionMatches = CategorizationEngine.evaluateAllCollections(details, 'movie');
+        if (collectionMatches.length > 0) {
+          console.log(`[WatchlistTrigger] Movie "${details.title}" matches ${collectionMatches.length} collection rules`);
+          // Note: Actual collection sync happens after Plex sync detects the new item
+        }
+      } catch (colError) {
+        console.error('[WatchlistTrigger] Collection evaluation error:', colError);
+      }
+
+      return {
+        success: true,
+        radarrId: result.id,
+        categorization: categorizationResult ? {
+          ruleName: categorizationResult.ruleName,
+          rootFolder,
+          qualityProfileId
+        } : null
+      };
     } catch (error) {
       console.error('[WatchlistTrigger] Radarr error:', error);
       return { success: false, error: error.message };
@@ -435,16 +490,69 @@ class WatchlistTriggerService {
         return { success: false, error: 'Sonarr not properly configured' };
       }
 
+      // Evaluate categorization rules to determine root folder and quality profile
+      // Only library-mode rules affect root folder placement
+      let rootFolder = rootFolders[0].path;
+      let qualityProfileId = qualityProfiles[0].id;
+      let categorizationResult = null;
+
+      try {
+        // Get library-mode rule for root folder placement
+        categorizationResult = CategorizationEngine.evaluateLibraryRule(details, 'tv');
+        if (categorizationResult) {
+          // Use categorization rule settings if they exist
+          if (categorizationResult.rootFolder) {
+            // Validate the root folder exists
+            const validFolder = rootFolders.find(f => f.path === categorizationResult.rootFolder);
+            if (validFolder) {
+              rootFolder = categorizationResult.rootFolder;
+              console.log(`[WatchlistTrigger] Categorization: Using root folder "${rootFolder}" for "${details.name}"`);
+            }
+          }
+          if (categorizationResult.qualityProfileId) {
+            // Validate the quality profile exists
+            const validProfile = qualityProfiles.find(p => p.id === categorizationResult.qualityProfileId);
+            if (validProfile) {
+              qualityProfileId = categorizationResult.qualityProfileId;
+              console.log(`[WatchlistTrigger] Categorization: Using quality profile "${validProfile.name}" for "${details.name}"`);
+            }
+          }
+        }
+      } catch (catError) {
+        console.error('[WatchlistTrigger] Categorization evaluation error:', catError);
+        // Continue with defaults
+      }
+
       // Add to Sonarr - all seasons monitored by default
       const result = await this.sonarr.addSeries(
         tvdbId,
-        qualityProfiles[0].id,
-        rootFolders[0].path,
+        qualityProfileId,
+        rootFolder,
         true,  // monitored
         true   // searchNow
       );
 
-      return { success: true, sonarrId: result.id };
+      // Check for collection-mode rules and queue collection updates
+      // Collections will be synced once the item appears in Plex
+      try {
+        const collectionMatches = CategorizationEngine.evaluateAllCollections(details, 'tv');
+        if (collectionMatches.length > 0) {
+          console.log(`[WatchlistTrigger] Show "${details.name}" matches ${collectionMatches.length} collection rules`);
+          // Note: Actual collection sync happens after Plex sync detects the new item
+        }
+      } catch (colError) {
+        console.error('[WatchlistTrigger] Collection evaluation error:', colError);
+      }
+
+      return {
+        success: true,
+        sonarrId: result.id,
+        categorization: categorizationResult ? {
+          ruleName: categorizationResult.ruleName,
+          rootFolder,
+          qualityProfileId
+        } : null
+      };
     } catch (error) {
       console.error('[WatchlistTrigger] Sonarr error:', error);
       return { success: false, error: error.message };
