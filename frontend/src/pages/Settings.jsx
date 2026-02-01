@@ -557,6 +557,13 @@ export default function SettingsPage() {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobsFilter, setJobsFilter] = useState('all');
 
+  // Library scan state
+  const [scanStatus, setScanStatus] = useState(null);
+  const [scanResults, setScanResults] = useState([]);
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [selectedScanItems, setSelectedScanItems] = useState([]);
+
   // Plex libraries for auto-invite
   const [plexLibraries, setPlexLibraries] = useState([]);
   const [loadingLibraries, setLoadingLibraries] = useState(false);
@@ -597,6 +604,7 @@ export default function SettingsPage() {
     detectHardware();
     fetchPlexLibraries();
     fetchInvitations();
+    fetchScanStatus();
   }, []);
 
   const fetchSettings = async () => {
@@ -759,6 +767,106 @@ export default function SettingsPage() {
     }
     toast.success(`Deleted ${deleted} failed jobs`);
     fetchConversionJobs();
+  };
+
+  // Library scan functions
+  const fetchScanStatus = async () => {
+    try {
+      const res = await api.get('/scan/incompatible');
+      setScanStatus(res.data.scan);
+      setScanResults(res.data.results || []);
+      // If scan is running, start polling
+      if (res.data.scan?.status === 'running') {
+        pollScanStatus();
+      }
+    } catch (err) {
+      console.error('Failed to fetch scan status:', err);
+    }
+  };
+
+  const startLibraryScan = async () => {
+    setScanLoading(true);
+    try {
+      const res = await api.post('/scan/incompatible');
+      toast.success('Library scan started');
+      setScanStatus({ status: 'running', scanned: 0, totalItems: 0 });
+      setShowScanModal(true);
+      // Poll for updates
+      pollScanStatus();
+    } catch (err) {
+      if (err.response?.data?.scanId) {
+        toast.error('A scan is already in progress');
+        setShowScanModal(true);
+        fetchScanStatus();
+      } else {
+        toast.error(err.response?.data?.error || 'Failed to start scan');
+      }
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  const pollScanStatus = () => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get('/scan/incompatible');
+        setScanStatus(res.data.scan);
+        setScanResults(res.data.results || []);
+        if (res.data.scan?.status !== 'running') {
+          clearInterval(interval);
+          if (res.data.scan?.status === 'completed') {
+            toast.success(`Scan complete! Found ${res.data.results?.length || 0} incompatible files`);
+          }
+        }
+      } catch (err) {
+        clearInterval(interval);
+      }
+    }, 2000);
+  };
+
+  const processSelectedItems = async () => {
+    if (selectedScanItems.length === 0) {
+      toast.error('No items selected');
+      return;
+    }
+    try {
+      const res = await api.post('/scan/incompatible/process', { items: selectedScanItems });
+      toast.success(`Queued ${res.data.queued} items for processing`);
+      setSelectedScanItems([]);
+      fetchScanStatus();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to process items');
+    }
+  };
+
+  const processAllItems = async () => {
+    const unprocessed = scanResults.filter(r => !r.processed);
+    if (unprocessed.length === 0) {
+      toast.error('No unprocessed items');
+      return;
+    }
+    if (!window.confirm(`Process all ${unprocessed.length} incompatible files?`)) return;
+    try {
+      const res = await api.post('/scan/incompatible/process', { items: unprocessed.map(r => r.id) });
+      toast.success(`Queued ${res.data.queued} items for processing`);
+      fetchScanStatus();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to process items');
+    }
+  };
+
+  const deleteScanResults = async () => {
+    if (!scanStatus?.id) return;
+    if (!window.confirm('Delete scan results?')) return;
+    try {
+      await api.delete(`/scan/incompatible/${scanStatus.id}`);
+      setScanStatus(null);
+      setScanResults([]);
+      setShowScanModal(false);
+      toast.success('Scan results deleted');
+    } catch (err) {
+      toast.error('Failed to delete scan results');
+    }
   };
 
   const fetchProtectionStats = async () => {
@@ -1902,6 +2010,66 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('auto_convert_enabled', v)}
           />
         </SettingRow>
+
+        {/* Library Scan */}
+        <div className="mt-6 mb-4 p-3 bg-slate-700/50 rounded-lg">
+          <h4 className="text-sm font-medium text-white mb-1">Scan Existing Library</h4>
+          <p className="text-xs text-slate-400">Scan your entire library for incompatible formats (new imports are detected automatically)</p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={startLibraryScan}
+            disabled={scanLoading || scanStatus?.status === 'running'}
+            className="btn btn-primary flex items-center gap-2"
+          >
+            {scanLoading || scanStatus?.status === 'running' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Search className="h-4 w-4" />
+            )}
+            {scanStatus?.status === 'running' ? 'Scanning...' : 'Scan Library'}
+          </button>
+          {scanStatus && (
+            <button
+              onClick={() => { fetchScanStatus(); setShowScanModal(true); }}
+              className="btn btn-secondary flex items-center gap-2"
+            >
+              <Eye className="h-4 w-4" />
+              View Results
+              {scanStatus.incompatibleCount > 0 && (
+                <span className="bg-amber-500 text-white text-xs px-1.5 py-0.5 rounded-full ml-1">
+                  {scanStatus.incompatibleCount}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
+
+        {scanStatus?.status === 'running' && (
+          <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+            <div className="flex items-center gap-2 text-blue-400 text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Scanning: {scanStatus.currentLibrary || 'Starting...'}</span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              Scanned {scanStatus.scanned || 0} of ~{scanStatus.totalItems || '?'} items
+            </div>
+            <div className="mt-2 w-full bg-slate-700 rounded-full h-1.5">
+              <div
+                className="bg-blue-500 h-1.5 rounded-full transition-all"
+                style={{ width: `${scanStatus.totalItems ? Math.min(100, (scanStatus.scanned / scanStatus.totalItems) * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Conversion Settings */}
+        <div className="mt-6 mb-4 p-3 bg-slate-700/50 rounded-lg">
+          <h4 className="text-sm font-medium text-white mb-1">Conversion Settings</h4>
+          <p className="text-xs text-slate-400">Configure hardware acceleration and quality for conversions</p>
+        </div>
+
         <SettingRow label="Hardware Acceleration" description="Use GPU for faster encoding">
           <SelectInput
             value={getStr('auto_convert_hwaccel', 'none')}
@@ -2195,6 +2363,173 @@ export default function SettingsPage() {
             setAddingService(false);
           }}
         />
+      )}
+
+      {/* Library Scan Results Modal */}
+      {showScanModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-700">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Library Scan Results</h2>
+                {scanStatus && (
+                  <p className="text-sm text-slate-400 mt-1">
+                    {scanStatus.status === 'running' ? (
+                      <>Scanning: {scanStatus.scanned || 0} items checked</>
+                    ) : scanStatus.status === 'completed' ? (
+                      <>Scan complete: {scanResults.length} incompatible files found</>
+                    ) : scanStatus.status === 'failed' ? (
+                      <>Scan failed: {scanStatus.errorMessage}</>
+                    ) : (
+                      <>Status: {scanStatus.status}</>
+                    )}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setShowScanModal(false)}
+                className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5 text-slate-400" />
+              </button>
+            </div>
+
+            {/* Progress bar for running scan */}
+            {scanStatus?.status === 'running' && (
+              <div className="px-4 py-2 bg-blue-500/10 border-b border-slate-700">
+                <div className="flex items-center gap-2 text-blue-400 text-sm mb-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Scanning: {scanStatus.currentLibrary || 'Starting...'}</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-1.5">
+                  <div
+                    className="bg-blue-500 h-1.5 rounded-full transition-all"
+                    style={{ width: `${scanStatus.totalItems ? Math.min(100, (scanStatus.scanned / scanStatus.totalItems) * 100) : 0}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Results list */}
+            <div className="flex-1 overflow-auto p-4">
+              {scanResults.length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  {scanStatus?.status === 'running' ? (
+                    <>Scanning library...</>
+                  ) : (
+                    <>No incompatible files found</>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {/* Select all header */}
+                  <div className="flex items-center gap-3 pb-2 border-b border-slate-700 mb-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedScanItems.length === scanResults.filter(r => !r.processed).length && scanResults.filter(r => !r.processed).length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedScanItems(scanResults.filter(r => !r.processed).map(r => r.id));
+                        } else {
+                          setSelectedScanItems([]);
+                        }
+                      }}
+                      className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                    />
+                    <span className="text-sm text-slate-400">
+                      {selectedScanItems.length > 0 ? `${selectedScanItems.length} selected` : 'Select all unprocessed'}
+                    </span>
+                  </div>
+
+                  {scanResults.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`flex items-center gap-3 p-3 rounded-lg border ${
+                        item.processed
+                          ? 'bg-slate-700/30 border-slate-700/50 opacity-60'
+                          : 'bg-slate-700/50 border-slate-600'
+                      }`}
+                    >
+                      {!item.processed && (
+                        <input
+                          type="checkbox"
+                          checked={selectedScanItems.includes(item.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedScanItems([...selectedScanItems, item.id]);
+                            } else {
+                              setSelectedScanItems(selectedScanItems.filter(id => id !== item.id));
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                        />
+                      )}
+                      {item.processed && (
+                        <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {item.media_type === 'movie' ? (
+                            <Film className="h-4 w-4 text-blue-400 flex-shrink-0" />
+                          ) : (
+                            <Tv className="h-4 w-4 text-purple-400 flex-shrink-0" />
+                          )}
+                          <span className="text-white truncate">{item.title}</span>
+                          {item.year && <span className="text-slate-500 text-sm">({item.year})</span>}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-1 truncate">{item.reason}</div>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full flex-shrink-0 ${
+                        item.conversion_type === 'dv5' ? 'bg-red-500/20 text-red-400' :
+                        item.conversion_type === 'dv7' ? 'bg-orange-500/20 text-orange-400' :
+                        item.conversion_type === 'dv8' ? 'bg-yellow-500/20 text-yellow-400' :
+                        item.conversion_type === 'av1' ? 'bg-purple-500/20 text-purple-400' :
+                        item.conversion_type === 'mkv_remux' ? 'bg-blue-500/20 text-blue-400' :
+                        'bg-slate-500/20 text-slate-400'
+                      }`}>
+                        {item.conversion_type}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-slate-700 bg-slate-800/50">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={deleteScanResults}
+                  className="btn btn-secondary text-red-400 hover:text-red-300 flex items-center gap-2"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Results
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedScanItems.length > 0 && (
+                  <button
+                    onClick={processSelectedItems}
+                    className="btn btn-primary flex items-center gap-2"
+                  >
+                    <Play className="h-4 w-4" />
+                    Process Selected ({selectedScanItems.length})
+                  </button>
+                )}
+                {scanResults.filter(r => !r.processed).length > 0 && (
+                  <button
+                    onClick={processAllItems}
+                    className="btn btn-secondary flex items-center gap-2"
+                  >
+                    <Zap className="h-4 w-4" />
+                    Process All ({scanResults.filter(r => !r.processed).length})
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

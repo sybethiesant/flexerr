@@ -2793,6 +2793,325 @@ app.post('/api/alternate-searches/:id/convert', authenticate, requireAdmin, asyn
 });
 
 // =========================
+// LIBRARY SCAN ROUTES
+// =========================
+
+// Initialize library scan table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS library_scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT DEFAULT 'running',
+    scanned INTEGER DEFAULT 0,
+    total_items INTEGER DEFAULT 0,
+    current_library TEXT,
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    started_by INTEGER,
+    error_message TEXT
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS library_scan_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    title TEXT,
+    show_title TEXT,
+    season INTEGER,
+    episode INTEGER,
+    year INTEGER,
+    media_type TEXT,
+    file_path TEXT,
+    reason TEXT,
+    conversion_type TEXT,
+    rating_key TEXT,
+    processed INTEGER DEFAULT 0,
+    FOREIGN KEY (scan_id) REFERENCES library_scans(id) ON DELETE CASCADE
+  )
+`);
+
+// Start a library scan (runs in background)
+app.post('/api/scan/incompatible', authenticate, requireAdmin, async (req, res) => {
+  try {
+    // Check if a scan is already running
+    const running = db.prepare("SELECT * FROM library_scans WHERE status = 'running'").get();
+    if (running) {
+      return res.status(400).json({ error: 'A scan is already in progress', scanId: running.id });
+    }
+
+    const PlexService = require('./services/plex');
+    const plex = PlexService.fromDb();
+    if (!plex) {
+      return res.status(400).json({ error: 'Plex not configured' });
+    }
+
+    // Create scan record
+    const result = db.prepare(`
+      INSERT INTO library_scans (status, started_by) VALUES ('running', ?)
+    `).run(req.user.userId);
+    const scanId = result.lastInsertRowid;
+
+    console.log('[API] Starting background library scan, ID:', scanId);
+
+    // Return immediately with scan ID
+    res.json({ success: true, scanId, message: 'Scan started in background' });
+
+    // Run scan in background
+    runLibraryScan(scanId, plex);
+
+  } catch (error) {
+    console.error('[API] Start scan error:', error);
+    res.status(500).json({ error: 'Failed to start scan: ' + error.message });
+  }
+});
+
+// Background scan function
+async function runLibraryScan(scanId, plex) {
+  const MediaConverterService = require('./services/media-converter');
+  const converter = new MediaConverterService();
+
+  try {
+    // Get all libraries and count total items
+    const libraries = await plex.getLibraries();
+    let totalItems = 0;
+
+    // Count movies
+    const movieLibraries = libraries.filter(lib => lib.type === 'movie');
+    for (const lib of movieLibraries) {
+      const movies = await plex.getLibraryContents(lib.id);
+      totalItems += movies.length;
+    }
+
+    // Count episodes (approximate by counting shows * avg episodes)
+    const tvLibraries = libraries.filter(lib => lib.type === 'show');
+    for (const lib of tvLibraries) {
+      const shows = await plex.getLibraryContents(lib.id);
+      // Estimate ~20 episodes per show for progress (will be refined as we scan)
+      totalItems += shows.length * 20;
+    }
+
+    db.prepare('UPDATE library_scans SET total_items = ? WHERE id = ?').run(totalItems, scanId);
+
+    let scanned = 0;
+
+    // Scan movie libraries
+    for (const lib of movieLibraries) {
+      db.prepare('UPDATE library_scans SET current_library = ? WHERE id = ?').run(lib.title, scanId);
+
+      try {
+        const movies = await plex.getLibraryContents(lib.id);
+        for (const movie of movies) {
+          try {
+            const metadata = await plex.getItemMetadata(movie.ratingKey);
+            const filePath = metadata?.Media?.[0]?.Part?.[0]?.file;
+            if (!filePath) {
+              scanned++;
+              continue;
+            }
+
+            const check = await converter.needsConversion(filePath);
+
+            if (check.needs) {
+              db.prepare(`
+                INSERT INTO library_scan_results (scan_id, title, year, media_type, file_path, reason, conversion_type, rating_key)
+                VALUES (?, ?, ?, 'movie', ?, ?, ?, ?)
+              `).run(scanId, movie.title, movie.year, filePath, check.reason, check.type, movie.ratingKey);
+            }
+
+            scanned++;
+            if (scanned % 10 === 0) {
+              db.prepare('UPDATE library_scans SET scanned = ? WHERE id = ?').run(scanned, scanId);
+            }
+          } catch (e) {
+            scanned++;
+            console.error('[Scan] Error scanning movie:', movie.title, e.message);
+          }
+        }
+      } catch (e) {
+        console.error('[Scan] Error scanning library:', lib.title, e.message);
+      }
+    }
+
+    // Scan TV libraries
+    for (const lib of tvLibraries) {
+      db.prepare('UPDATE library_scans SET current_library = ? WHERE id = ?').run(lib.title, scanId);
+
+      try {
+        const shows = await plex.getLibraryContents(lib.id);
+        for (const show of shows) {
+          try {
+            const seasons = await plex.getShowSeasons(show.ratingKey);
+            for (const season of seasons) {
+              const episodes = await plex.getSeasonEpisodes(season.ratingKey);
+              for (const episode of episodes) {
+                try {
+                  const metadata = await plex.getItemMetadata(episode.ratingKey);
+                  const filePath = metadata?.Media?.[0]?.Part?.[0]?.file;
+                  if (!filePath) {
+                    scanned++;
+                    continue;
+                  }
+
+                  const check = await converter.needsConversion(filePath);
+
+                  if (check.needs) {
+                    const title = `${show.title} - S${String(season.index).padStart(2, '0')}E${String(episode.index).padStart(2, '0')} - ${episode.title}`;
+                    db.prepare(`
+                      INSERT INTO library_scan_results (scan_id, title, show_title, season, episode, media_type, file_path, reason, conversion_type, rating_key)
+                      VALUES (?, ?, ?, ?, ?, 'episode', ?, ?, ?, ?)
+                    `).run(scanId, title, show.title, season.index, episode.index, filePath, check.reason, check.type, episode.ratingKey);
+                  }
+
+                  scanned++;
+                  if (scanned % 10 === 0) {
+                    db.prepare('UPDATE library_scans SET scanned = ? WHERE id = ?').run(scanned, scanId);
+                  }
+                } catch (e) {
+                  scanned++;
+                }
+              }
+            }
+          } catch (e) {
+            console.error('[Scan] Error scanning show:', show.title, e.message);
+          }
+        }
+      } catch (e) {
+        console.error('[Scan] Error scanning library:', lib.title, e.message);
+      }
+    }
+
+    // Mark scan as complete
+    db.prepare(`
+      UPDATE library_scans SET status = 'completed', scanned = ?, completed_at = CURRENT_TIMESTAMP, current_library = NULL
+      WHERE id = ?
+    `).run(scanned, scanId);
+
+    const incompatibleCount = db.prepare('SELECT COUNT(*) as count FROM library_scan_results WHERE scan_id = ?').get(scanId).count;
+    console.log(`[Scan] Complete. Scanned: ${scanned}, Incompatible: ${incompatibleCount}`);
+
+    log('info', 'convert', `Library scan complete: ${incompatibleCount} incompatible files found`, {
+      scan_id: scanId,
+      scanned,
+      incompatible_count: incompatibleCount
+    });
+
+  } catch (error) {
+    console.error('[Scan] Error:', error);
+    db.prepare(`
+      UPDATE library_scans SET status = 'failed', error_message = ?, completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(error.message, scanId);
+  }
+}
+
+// Get scan status and results
+app.get('/api/scan/incompatible', authenticate, requireAdmin, (req, res) => {
+  try {
+    // Get latest scan
+    const scan = db.prepare('SELECT * FROM library_scans ORDER BY id DESC LIMIT 1').get();
+    if (!scan) {
+      return res.json({ scan: null, results: [] });
+    }
+
+    // Get results if scan exists
+    const results = db.prepare('SELECT * FROM library_scan_results WHERE scan_id = ? ORDER BY id').all(scan.id);
+
+    res.json({
+      scan: {
+        id: scan.id,
+        status: scan.status,
+        scanned: scan.scanned,
+        totalItems: scan.total_items,
+        currentLibrary: scan.current_library,
+        startedAt: scan.started_at,
+        completedAt: scan.completed_at,
+        errorMessage: scan.error_message,
+        incompatibleCount: results.length
+      },
+      results
+    });
+  } catch (error) {
+    console.error('[API] Get scan error:', error);
+    res.status(500).json({ error: 'Failed to get scan status' });
+  }
+});
+
+// Delete scan results
+app.delete('/api/scan/incompatible/:id', authenticate, requireAdmin, (req, res) => {
+  try {
+    const scanId = parseInt(req.params.id);
+    db.prepare('DELETE FROM library_scan_results WHERE scan_id = ?').run(scanId);
+    db.prepare('DELETE FROM library_scans WHERE id = ?').run(scanId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Delete scan error:', error);
+    res.status(500).json({ error: 'Failed to delete scan' });
+  }
+});
+
+// Queue incompatible items for processing (admin only)
+app.post('/api/scan/incompatible/process', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { items } = req.body; // Array of item IDs from scan results
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'No items provided' });
+    }
+
+    const MediaConverterService = require('./services/media-converter');
+    const converter = new MediaConverterService();
+
+    const results = {
+      queued: 0,
+      skipped: 0,
+      errors: []
+    };
+
+    for (const itemId of items) {
+      try {
+        const item = db.prepare('SELECT * FROM library_scan_results WHERE id = ?').get(itemId);
+        if (!item || item.processed) {
+          results.skipped++;
+          continue;
+        }
+
+        // Get Sonarr/Radarr info if available
+        let arrInfo = null;
+        if (MediaConverterService.isPreferAlternateEnabled()) {
+          arrInfo = await converter.getArrInfoForFile(item.file_path, item.media_type);
+        }
+
+        const result = await converter.processFile(
+          item.file_path,
+          item.title,
+          item.media_type,
+          null,
+          arrInfo
+        );
+
+        if (result.processed) {
+          results.queued++;
+          db.prepare('UPDATE library_scan_results SET processed = 1 WHERE id = ?').run(itemId);
+        } else {
+          results.skipped++;
+        }
+      } catch (e) {
+        results.errors.push({ itemId, error: e.message });
+      }
+    }
+
+    log('info', 'convert', `Queued ${results.queued} items for processing`, {
+      queued: results.queued,
+      skipped: results.skipped
+    });
+
+    res.json(results);
+  } catch (error) {
+    console.error('[API] Process items error:', error);
+    res.status(500).json({ error: 'Failed to process items: ' + error.message });
+  }
+});
+
+// =========================
 // MEDIA STATISTICS ROUTES
 // =========================
 
