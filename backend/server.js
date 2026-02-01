@@ -2709,6 +2709,90 @@ app.delete('/api/conversions/:id', authenticate, requireAdmin, (req, res) => {
 });
 
 // =========================
+// ALTERNATE SEARCH QUEUE ROUTES
+// =========================
+
+// Get alternate search queue (admin only)
+app.get('/api/alternate-searches', authenticate, requireAdmin, (req, res) => {
+  try {
+    const { status } = req.query;
+    const MediaConverterService = require('./services/media-converter');
+    const entries = MediaConverterService.getAlternateSearchQueue(status || null);
+
+    res.json({
+      entries: entries.map(e => ({
+        id: e.id,
+        title: e.title,
+        media_type: e.media_type,
+        tmdb_id: e.tmdb_id,
+        incompatible_reason: e.incompatible_reason,
+        conversion_type: e.conversion_type,
+        status: e.status,
+        search_attempts: e.search_attempts,
+        created_at: e.created_at,
+        expires_at: e.expires_at,
+        resolved_at: e.resolved_at,
+        resolution: e.resolution
+      })),
+      settings: {
+        preferAlternate: MediaConverterService.isPreferAlternateEnabled(),
+        waitHours: MediaConverterService.getAlternateWaitHours(),
+        blocklistBad: MediaConverterService.isBlocklistBadEnabled()
+      }
+    });
+  } catch (error) {
+    console.error('[API] Get alternate searches error:', error);
+    res.status(500).json({ error: 'Failed to get alternate search queue' });
+  }
+});
+
+// Cancel an alternate search and optionally convert (admin only)
+app.post('/api/alternate-searches/:id/cancel', authenticate, requireAdmin, (req, res) => {
+  try {
+    const searchId = parseInt(req.params.id);
+    const { triggerConversion } = req.body;
+    const MediaConverterService = require('./services/media-converter');
+
+    const result = MediaConverterService.cancelAlternateSearch(searchId, triggerConversion === true);
+    if (!result) {
+      return res.status(404).json({ error: 'Alternate search entry not found' });
+    }
+
+    log('info', 'convert', 'Alternate search cancelled', { search_id: searchId, trigger_conversion: triggerConversion, user_id: req.user.userId });
+    res.json({ success: true, message: triggerConversion ? 'Cancelled and conversion queued' : 'Cancelled' });
+  } catch (error) {
+    console.error('[API] Cancel alternate search error:', error);
+    res.status(500).json({ error: 'Failed to cancel alternate search' });
+  }
+});
+
+// Force convert an alternate search entry (admin only)
+app.post('/api/alternate-searches/:id/convert', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const searchId = parseInt(req.params.id);
+    const entry = db.prepare('SELECT * FROM alternate_search_queue WHERE id = ?').get(searchId);
+
+    if (!entry) {
+      return res.status(404).json({ error: 'Alternate search entry not found' });
+    }
+
+    if (entry.status === 'resolved' || entry.status === 'converting') {
+      return res.status(400).json({ error: 'Entry already resolved or converting' });
+    }
+
+    const MediaConverterService = require('./services/media-converter');
+    const converter = new MediaConverterService();
+    await converter.fallbackToConversion(entry);
+
+    log('info', 'convert', 'Forced conversion for alternate search: ' + entry.title, { search_id: searchId, user_id: req.user.userId });
+    res.json({ success: true, message: 'Conversion queued' });
+  } catch (error) {
+    console.error('[API] Force convert error:', error);
+    res.status(500).json({ error: 'Failed to force conversion' });
+  }
+});
+
+// =========================
 // MEDIA STATISTICS ROUTES
 // =========================
 

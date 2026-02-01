@@ -209,11 +209,23 @@ Automatically convert incompatible media formats for better playback compatibili
 | MKV → MP4 | Container remux for iOS/web | Fast (no re-encode) |
 | TrueHD/DTS-HD → EAC3 | Audio for streaming devices | Medium (audio only) |
 
+**Prefer Alternate Release (Smart Mode):**
+
+Instead of converting immediately, Flexerr can try to find a compatible release first:
+1. Detects incompatible format in newly imported file
+2. Adds the release to Sonarr/Radarr blocklist (prevents re-download)
+3. Deletes the file and triggers a new search
+4. Waits for a configurable time (default 24 hours) for an alternate
+5. Only converts as a last resort if no alternate is found
+
+This is ideal when you want the best possible quality - conversion should be the fallback, not the default. Configure via Settings → Auto Convert → "Prefer Alternate Release".
+
 **Notes:**
 - All options are disabled by default
 - Hardware acceleration (NVENC/VAAPI) dramatically speeds up conversions
 - Original files can optionally be preserved
 - MKV remux is the fastest option (just repackages, no quality loss)
+- "Prefer Alternate Release" requires Sonarr/Radarr to be configured
 
 ### Auto-Invite New Users
 

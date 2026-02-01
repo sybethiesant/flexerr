@@ -15,7 +15,7 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 - **Media Automation** - Seamlessly integrates with Sonarr/Radarr for hands-free library management
 - **VIPER** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from cleanup
-- **Auto Convert** - Fix incompatible formats (DV5/7/8, AV1, MKV, TrueHD/DTS) with GPU acceleration
+- **Auto Convert** - Fix incompatible formats (DV5/7/8, AV1, MKV, TrueHD/DTS) with GPU acceleration, or automatically search for compatible releases first
 - **Multi-User Support** - Each user has their own watchlist
 
 ## Quick Start
