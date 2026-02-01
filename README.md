@@ -257,12 +257,27 @@ VIPER intelligently manages TV show episodes based on each user's watch progress
 
 ### Example Scenario
 
-- **User A** binges a show, watches S1-S4 in a week
-- **User B** watches 1 episode per day
-- After User A finishes S1, those episodes are NOT deleted yet
-- Flexerr waits for User B to catch up
-- When User B finishes S1, those episodes are cleaned up
-- If User B suddenly speeds up, Flexerr detects the velocity change and ensures episodes are available
+A household of 3 users watching "Breaking Bad" (62 episodes):
+
+| User | Watch Speed | Current Position |
+|------|-------------|------------------|
+| Dad | 3 eps/day (binger) | Season 4, Episode 8 |
+| Mom | 1 ep/day (steady) | Season 2, Episode 5 |
+| Teen | Paused for 2 weeks | Season 1, Episode 3 |
+
+**What VIPER does:**
+- Episodes S1E01-S1E02 → Safe to clean (everyone's past them)
+- Episodes S1E03+ → Protected (Teen is still there)
+- Episodes S2E05+ → Protected (Mom hasn't reached them)
+- Episodes ahead of Dad → Kept available based on his velocity buffer
+
+**What happens next:**
+- Teen resumes watching, finishes S1 in a few days
+- Now S1E03-S1E10 become eligible for cleanup (Mom and Dad are past, Teen just finished)
+- Mom continues steady pace, her "bubble" of protected episodes moves forward with her
+- Storage is reclaimed gradually as the slowest user progresses
+
+**The key insight:** Each user has an invisible bubble around their position. Content is only cleaned when it falls outside ALL users' bubbles.
 
 ## Media Protection
 
