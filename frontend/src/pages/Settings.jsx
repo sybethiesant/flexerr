@@ -368,11 +368,18 @@ function ServiceModal({ service, onSave, onClose, isNew = false }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await api.post('/services/test', {
-        type: formData.type,
-        url: formData.url,
-        api_key: formData.api_key || service?.api_key_raw
-      });
+      let res;
+      if (!isNew && !formData.api_key && service?.id) {
+        // Editing existing service with no new API key - use stored key via service ID
+        res = await api.post(`/services/${service.id}/test`);
+      } else {
+        // New service or new API key provided - test with provided credentials
+        res = await api.post('/services/test', {
+          type: formData.type,
+          url: formData.url,
+          api_key: formData.api_key
+        });
+      }
       setTestResult(res.data);
     } catch (err) {
       setTestResult({ success: false, error: err.response?.data?.error || err.message });
