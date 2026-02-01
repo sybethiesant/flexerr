@@ -70,6 +70,8 @@ User Watchlist → Media Acquisition → Watch → VIPER Cleanup → Re-watchlis
 - **Radarr** (for movies)
 - **TMDB API Key** ([get one free](https://www.themoviedb.org/settings/api))
 
+> **Note:** Flexerr is not compatible with Overseerr, Jellyseerr, or similar request management tools. Flexerr manages requests directly through Sonarr/Radarr and should be used as a standalone solution.
+
 ### Installation
 
 **Option 1: Docker Hub (Recommended)**
