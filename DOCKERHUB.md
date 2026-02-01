@@ -63,14 +63,52 @@ volumes:
 
 ## GPU Support (NVIDIA)
 
+For hardware-accelerated video conversion (Auto Convert feature), run with NVIDIA runtime:
+
 ```bash
 docker run -d \
   --name flexerr \
   --runtime=nvidia \
   -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -e TZ=America/Los_Angeles \
   -p 5505:5505 \
   -v flexerr-data:/app/data \
+  -v /path/to/media:/Media \
   sybersects/flexerr:latest
+```
+
+**Requirements:**
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed on host
+- NVIDIA GPU with NVENC support (GTX 600+ series)
+
+**Verify GPU access:**
+```bash
+docker exec flexerr nvidia-smi
+docker exec flexerr ffmpeg -encoders 2>/dev/null | grep nvenc
+```
+
+### Docker Compose with GPU
+
+```yaml
+services:
+  flexerr:
+    image: sybersects/flexerr:latest
+    container_name: flexerr
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "5505:5505"
+    volumes:
+      - flexerr-data:/app/data
+      - /path/to/media:/Media
+    environment:
+      - TZ=America/Los_Angeles
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+volumes:
+  flexerr-data:
 ```
 
 ## Documentation
