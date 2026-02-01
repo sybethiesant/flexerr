@@ -532,6 +532,8 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchSettings();
     fetchServices();
+    // Auto-detect hardware on load
+    detectHardware();
   }, []);
 
   // Fetch all available streaming providers from TMDB
@@ -1766,31 +1768,44 @@ export default function SettingsPage() {
           />
         </SettingRow>
         <SettingRow label="GPU Device" description="GPU device for hardware acceleration">
-          {getStr('auto_convert_hwaccel', 'none') === 'nvenc' && detectedHardware?.nvidia?.available ? (
+          {getStr('auto_convert_hwaccel', 'none') === 'nvenc' ? (
             <SelectInput
               value={getStr('auto_convert_gpu_device', '0')}
               onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
-              options={detectedHardware.nvidia.gpus.map(gpu => ({
-                value: gpu.device,
-                label: `${gpu.name} (${gpu.memory})`
-              }))}
+              options={
+                detectedHardware?.nvidia?.available
+                  ? detectedHardware.nvidia.gpus.map(gpu => ({
+                      value: gpu.device,
+                      label: `${gpu.name} (${gpu.memory})`
+                    }))
+                  : [
+                      { value: '0', label: 'GPU 0 (Default)' },
+                      { value: '1', label: 'GPU 1' },
+                      { value: '2', label: 'GPU 2' }
+                    ]
+              }
             />
-          ) : getStr('auto_convert_hwaccel', 'none') === 'vaapi' && detectedHardware?.vaapi?.available ? (
+          ) : getStr('auto_convert_hwaccel', 'none') === 'vaapi' ? (
             <SelectInput
               value={getStr('auto_convert_gpu_device', '/dev/dri/renderD128')}
               onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
-              options={detectedHardware.vaapi.devices.map(dev => ({
-                value: dev.path,
-                label: dev.name
-              }))}
+              options={
+                detectedHardware?.vaapi?.available
+                  ? detectedHardware.vaapi.devices.map(dev => ({
+                      value: dev.path,
+                      label: dev.name
+                    }))
+                  : [
+                      { value: '/dev/dri/renderD128', label: 'renderD128 (Default)' },
+                      { value: '/dev/dri/renderD129', label: 'renderD129' },
+                      { value: '/dev/dri/card0', label: 'card0' },
+                      { value: '/dev/dri/card1', label: 'card1' }
+                    ]
+              }
             />
           ) : (
-            <div className="w-48">
-              <TextInput
-                value={getStr('auto_convert_gpu_device', '')}
-                onChange={(v) => updateSetting('auto_convert_gpu_device', v)}
-                placeholder={getStr('auto_convert_hwaccel', 'none') === 'nvenc' ? '0' : '/dev/dri/renderD128'}
-              />
+            <div className="w-48 text-sm text-slate-400">
+              N/A (CPU encoding)
             </div>
           )}
         </SettingRow>
@@ -1805,12 +1820,18 @@ export default function SettingsPage() {
             ]}
           />
         </SettingRow>
-        <SettingRow label="Output Quality" description="CRF value (lower = better quality, larger file)">
-          <NumberInput
-            value={getInt('auto_convert_crf', 18)}
+        <SettingRow label="Output Quality" description="Higher quality = larger file size">
+          <SelectInput
+            value={getStr('auto_convert_crf', '18')}
             onChange={(v) => updateSetting('auto_convert_crf', v)}
-            min={0}
-            max={51}
+            options={[
+              { value: '0', label: 'Lossless (Huge files)' },
+              { value: '14', label: 'Near Lossless (Very large)' },
+              { value: '18', label: 'High Quality (Recommended)' },
+              { value: '22', label: 'Balanced (Good quality, smaller)' },
+              { value: '26', label: 'Medium (Decent quality, compact)' },
+              { value: '30', label: 'Low (Smaller files, visible loss)' }
+            ]}
           />
         </SettingRow>
         <SettingRow label="Keep Original" description="Keep original file after successful conversion">
