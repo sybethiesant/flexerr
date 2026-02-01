@@ -194,6 +194,27 @@ docker exec flexerr ffmpeg -encoders 2>/dev/null | grep nvenc
 
 Supported encoders: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`
 
+### Auto Convert
+
+Automatically convert incompatible media formats for better playback compatibility. All conversions are optional and can be enabled individually in Settings.
+
+**Supported Conversions:**
+
+| Conversion | Description | Speed |
+|------------|-------------|-------|
+| DV Profile 5 → HDR10 | Fixes Plex-incompatible Dolby Vision | Slow (re-encode) |
+| DV Profile 7 → HDR10 | Improves device compatibility | Slow (re-encode) |
+| DV Profile 8 → HDR10 | Broadest compatibility | Slow (re-encode) |
+| AV1 → HEVC | For devices without AV1 decode | Slow (re-encode) |
+| MKV → MP4 | Container remux for iOS/web | Fast (no re-encode) |
+| TrueHD/DTS-HD → EAC3 | Audio for streaming devices | Medium (audio only) |
+
+**Notes:**
+- All options are disabled by default
+- Hardware acceleration (NVENC/VAAPI) dramatically speeds up conversions
+- Original files can optionally be preserved
+- MKV remux is the fastest option (just repackages, no quality loss)
+
 ### Auto-Invite New Users
 
 Automatically invite new users to your Plex server when they sign in to Flexerr:
