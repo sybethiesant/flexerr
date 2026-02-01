@@ -453,7 +453,15 @@ export default function Setup() {
           {renderStep()}
           <div className="flex justify-between mt-8 pt-6 border-t border-slate-700">
             <button onClick={handleBack} disabled={currentStep === 0 || loading} className="btn bg-slate-700 hover:bg-slate-600 text-white flex items-center space-x-2 disabled:opacity-0"><ArrowLeft className="h-4 w-4" /><span>Back</span></button>
-            <button onClick={handleNext} disabled={loading} className="btn btn-primary flex items-center space-x-2">
+            <button onClick={handleNext} disabled={
+              loading ||
+              (steps[currentStep].id === 'connect' && formData.serverType === 'plex' && (
+                plexAuth.loading || plexAuth.polling || testing.plex || !testResults.plex?.success
+              )) ||
+              (steps[currentStep].id === 'connect' && formData.serverType === 'jellyfin' && (
+                jellyfinAuth.loading || !jellyfinAuth.authenticated
+              ))
+            } className="btn btn-primary flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><span>{currentStep === steps.length - 1 ? 'Get Started' : 'Continue'}</span><ArrowRight className="h-4 w-4" /></>}
             </button>
           </div>
