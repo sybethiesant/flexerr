@@ -28,7 +28,9 @@ async function moveFile(src, dest) {
 
 class MediaConverterService {
   constructor() {
-    this.tempPath = getSetting('auto_convert_temp_path') || '/tmp/flexerr-convert';
+    // Default to /Media/.flexerr-processing (on mounted media volume with more space)
+    // Falls back to /tmp if /Media doesn't exist (shouldn't happen in properly configured containers)
+    this.tempPath = getSetting('auto_convert_temp_path') || '/Media/.flexerr-processing';
     this.maxJobs = parseInt(getSetting('auto_convert_max_jobs')) || 1;
     this.activeJobs = 0;
     this.jobQueue = [];
@@ -768,6 +770,7 @@ class MediaConverterService {
   }
 
   // Handle alternate search for TV episodes via Sonarr
+  // New approach: File stays in place (playable), we just remove the record and search for replacement
   async handleSonarrAlternateSearch(entry, SonarrService) {
     const sonarr = SonarrService.fromDb();
     if (!sonarr) {
@@ -776,46 +779,72 @@ class MediaConverterService {
     }
 
     try {
-      // Step 1: Quarantine the file (move to temp location)
-      const quarantinePath = await this.quarantineFile(entry.file_path);
-      if (!quarantinePath) {
-        console.error('[MediaConverter] Failed to quarantine file, falling back to conversion');
+      // Step 1: Get episode file ID from Sonarr
+      const episodes = await sonarr.getEpisodesBySeries(entry.sonarr_series_id);
+      const episode = episodes?.find(e => e.id === entry.sonarr_episode_id);
+      const episodeFileId = episode?.episodeFileId;
+
+      if (!episodeFileId) {
+        console.log('[MediaConverter] No episode file ID found, falling back to conversion');
         return this.fallbackToConversion(entry);
       }
 
-      // Update entry with quarantine path
-      db.prepare(`UPDATE alternate_search_queue SET quarantine_path = ? WHERE id = ?`).run(quarantinePath, entry.id);
-      console.log('[MediaConverter] File quarantined to:', quarantinePath);
+      // Step 2: Temporarily rename the file so Sonarr can't delete it
+      const tempPath = entry.file_path + '.flexerr-temp';
+      try {
+        await fs.rename(entry.file_path, tempPath);
+        console.log('[MediaConverter] Temporarily renamed file for protection');
+      } catch (e) {
+        console.error('[MediaConverter] Failed to rename file:', e.message);
+        return this.fallbackToConversion(entry);
+      }
 
-      // Step 2: Try to blocklist the current release if enabled
+      // Step 3: Delete the episode file record (Sonarr will fail to delete physical file, but record is removed)
+      try {
+        await sonarr.deleteEpisodeFile(episodeFileId);
+        console.log('[MediaConverter] Removed episode file record from Sonarr');
+      } catch (e) {
+        console.log('[MediaConverter] Sonarr deleteEpisodeFile response:', e.message);
+        // This might "fail" but the record is usually still removed
+      }
+
+      // Step 4: Rename the file back to original (stays playable)
+      try {
+        await fs.rename(tempPath, entry.file_path);
+        console.log('[MediaConverter] Restored original filename - file stays playable');
+      } catch (e) {
+        console.error('[MediaConverter] Failed to restore filename:', e.message);
+        // Try to recover
+        try { await fs.rename(tempPath, entry.file_path); } catch {}
+      }
+
+      // Step 5: Blocklist the current release if enabled
       if (MediaConverterService.isBlocklistBadEnabled()) {
         console.log('[MediaConverter] Attempting to blocklist incompatible release...');
-
-        // Get history to find the download ID
-        const history = await sonarr.getHistory(entry.sonarr_episode_id, 'downloadFolderImported');
-        if (history?.records?.length > 0) {
-          const downloadId = history.records[0].downloadId;
-          if (downloadId) {
-            await sonarr.blockRelease(downloadId);
-            console.log('[MediaConverter] Release blocklisted successfully');
+        try {
+          const history = await sonarr.getHistory(entry.sonarr_episode_id, 'downloadFolderImported');
+          if (history?.records?.length > 0) {
+            const downloadId = history.records[0].downloadId;
+            if (downloadId) {
+              await sonarr.blockRelease(downloadId);
+              console.log('[MediaConverter] Release blocklisted successfully');
+            }
           }
+        } catch (e) {
+          console.log('[MediaConverter] Blocklist attempt:', e.message);
         }
       }
 
-      // Step 3: Tell Sonarr to rescan (it will see file is missing) and search
-      console.log('[MediaConverter] Triggering Sonarr rescan and search...');
+      // Step 6: Trigger search for replacement
+      console.log('[MediaConverter] Triggering Sonarr search for replacement...');
       await sonarr.searchEpisodes([entry.sonarr_episode_id]);
 
-      // Step 4: Mark as waiting and update status
+      // Step 7: Mark as waiting
       db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
 
-      log('info', 'convert', 'Quarantined incompatible release, searching for alternate: ' + entry.title, {
-        search_id: entry.id,
-        quarantine_path: quarantinePath
-      });
-
+      log('info', 'convert', 'Searching for alternate release (file stays playable): ' + entry.title, { search_id: entry.id });
       console.log('[MediaConverter] Alternate search triggered for:', entry.title);
-      console.log('[MediaConverter] Will wait up to ' + MediaConverterService.getAlternateWaitHours() + ' hours for alternate release');
+      console.log('[MediaConverter] File remains playable while waiting up to ' + MediaConverterService.getAlternateWaitHours() + ' hours');
 
     } catch (e) {
       console.error('[MediaConverter] Sonarr alternate search failed:', e.message);
@@ -824,6 +853,7 @@ class MediaConverterService {
   }
 
   // Handle alternate search for movies via Radarr
+  // New approach: File stays in place (playable), we just remove the record and search for replacement
   async handleRadarrAlternateSearch(entry, RadarrService) {
     const radarr = RadarrService.fromDb();
     if (!radarr) {
@@ -832,46 +862,71 @@ class MediaConverterService {
     }
 
     try {
-      // Step 1: Quarantine the file (move to temp location)
-      const quarantinePath = await this.quarantineFile(entry.file_path);
-      if (!quarantinePath) {
-        console.error('[MediaConverter] Failed to quarantine file, falling back to conversion');
+      // Step 1: Get movie file ID from Radarr
+      const movieFile = await radarr.getMovieFile(entry.radarr_movie_id);
+      const movieFileId = movieFile?.id;
+
+      if (!movieFileId) {
+        console.log('[MediaConverter] No movie file ID found, falling back to conversion');
         return this.fallbackToConversion(entry);
       }
 
-      // Update entry with quarantine path
-      db.prepare(`UPDATE alternate_search_queue SET quarantine_path = ? WHERE id = ?`).run(quarantinePath, entry.id);
-      console.log('[MediaConverter] File quarantined to:', quarantinePath);
+      // Step 2: Temporarily rename the file so Radarr can't delete it
+      const tempPath = entry.file_path + '.flexerr-temp';
+      try {
+        await fs.rename(entry.file_path, tempPath);
+        console.log('[MediaConverter] Temporarily renamed file for protection');
+      } catch (e) {
+        console.error('[MediaConverter] Failed to rename file:', e.message);
+        return this.fallbackToConversion(entry);
+      }
 
-      // Step 2: Try to blocklist the current release if enabled
+      // Step 3: Delete the movie file record (Radarr will fail to delete physical file, but record is removed)
+      try {
+        await radarr.deleteMovieFile(movieFileId);
+        console.log('[MediaConverter] Removed movie file record from Radarr');
+      } catch (e) {
+        console.log('[MediaConverter] Radarr deleteMovieFile response:', e.message);
+        // This might "fail" but the record is usually still removed
+      }
+
+      // Step 4: Rename the file back to original (stays playable)
+      try {
+        await fs.rename(tempPath, entry.file_path);
+        console.log('[MediaConverter] Restored original filename - file stays playable');
+      } catch (e) {
+        console.error('[MediaConverter] Failed to restore filename:', e.message);
+        // Try to recover
+        try { await fs.rename(tempPath, entry.file_path); } catch {}
+      }
+
+      // Step 5: Blocklist the current release if enabled
       if (MediaConverterService.isBlocklistBadEnabled()) {
         console.log('[MediaConverter] Attempting to blocklist incompatible release...');
-
-        // Get history to find the download ID
-        const history = await radarr.getHistory(entry.radarr_movie_id, 'downloadFolderImported');
-        if (history?.records?.length > 0) {
-          const downloadId = history.records[0].downloadId;
-          if (downloadId) {
-            await radarr.blockRelease(downloadId);
-            console.log('[MediaConverter] Release blocklisted successfully');
+        try {
+          const history = await radarr.getHistory(entry.radarr_movie_id, 'downloadFolderImported');
+          if (history?.records?.length > 0) {
+            const downloadId = history.records[0].downloadId;
+            if (downloadId) {
+              await radarr.blockRelease(downloadId);
+              console.log('[MediaConverter] Release blocklisted successfully');
+            }
           }
+        } catch (e) {
+          console.log('[MediaConverter] Blocklist attempt:', e.message);
         }
       }
 
-      // Step 3: Tell Radarr to rescan (it will see file is missing) and search
-      console.log('[MediaConverter] Triggering Radarr rescan and search...');
+      // Step 6: Trigger search for replacement
+      console.log('[MediaConverter] Triggering Radarr search for replacement...');
       await radarr.searchMovie(entry.radarr_movie_id);
 
-      // Step 4: Mark as waiting and update status
+      // Step 7: Mark as waiting
       db.prepare(`UPDATE alternate_search_queue SET status = 'waiting', search_attempts = search_attempts + 1 WHERE id = ?`).run(entry.id);
 
-      log('info', 'convert', 'Quarantined incompatible release, searching for alternate: ' + entry.title, {
-        search_id: entry.id,
-        quarantine_path: quarantinePath
-      });
-
+      log('info', 'convert', 'Searching for alternate release (file stays playable): ' + entry.title, { search_id: entry.id });
       console.log('[MediaConverter] Alternate search triggered for:', entry.title);
-      console.log('[MediaConverter] Will wait up to ' + MediaConverterService.getAlternateWaitHours() + ' hours for alternate release');
+      console.log('[MediaConverter] File remains playable while waiting up to ' + MediaConverterService.getAlternateWaitHours() + ' hours');
 
     } catch (e) {
       console.error('[MediaConverter] Radarr alternate search failed:', e.message);
@@ -879,7 +934,7 @@ class MediaConverterService {
     }
   }
 
-  // Quarantine a file by moving it to the temp directory
+  // Legacy quarantine method - now used only for conversion fallback if needed
   async quarantineFile(filePath) {
     try {
       await fs.mkdir(this.tempPath, { recursive: true });

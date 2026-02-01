@@ -3013,8 +3013,19 @@ app.get('/api/scan/incompatible', authenticate, requireAdmin, (req, res) => {
       return res.json({ scan: null, results: [] });
     }
 
-    // Get results if scan exists
-    const results = db.prepare('SELECT * FROM library_scan_results WHERE scan_id = ? ORDER BY id').all(scan.id);
+    // Get results with processing status from alternate_search_queue
+    const results = db.prepare(`
+      SELECT r.*,
+             asq.status as processing_status,
+             asq.resolution as processing_resolution,
+             asq.search_attempts,
+             asq.created_at as queued_at,
+             asq.resolved_at
+      FROM library_scan_results r
+      LEFT JOIN alternate_search_queue asq ON r.file_path = asq.file_path
+      WHERE r.scan_id = ?
+      ORDER BY r.id
+    `).all(scan.id);
 
     res.json({
       scan: {

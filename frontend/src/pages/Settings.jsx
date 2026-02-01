@@ -607,6 +607,23 @@ export default function SettingsPage() {
     fetchScanStatus();
   }, []);
 
+  // Auto-refresh scan results when modal is open and items are processing
+  useEffect(() => {
+    if (!showScanModal) return;
+
+    const hasProcessing = scanResults.some(r =>
+      r.processing_status && r.processing_status !== 'resolved'
+    );
+
+    if (!hasProcessing) return;
+
+    const interval = setInterval(() => {
+      fetchScanStatus();
+    }, 5000); // Refresh every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [showScanModal, scanResults]);
+
   const fetchSettings = async () => {
     try {
       const res = await api.get('/settings');
@@ -2164,10 +2181,10 @@ export default function SettingsPage() {
             />
           </div>
         </SettingRow>
-        <SettingRow label="Temp Directory" description="Temporary directory for conversion">
+        <SettingRow label="Processing Directory" description="Directory for quarantine/conversion. Use path on mounted media volume for more space.">
           <div className="w-64">
             <TextInput
-              value={getStr('auto_convert_temp_path', '/tmp/flexerr-convert')}
+              value={getStr('auto_convert_temp_path', '/Media/.flexerr-processing')}
               onChange={(v) => updateSetting('auto_convert_temp_path', v)}
             />
           </div>
@@ -2442,56 +2459,100 @@ export default function SettingsPage() {
                     </span>
                   </div>
 
-                  {scanResults.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`flex items-center gap-3 p-3 rounded-lg border ${
-                        item.processed
-                          ? 'bg-slate-700/30 border-slate-700/50 opacity-60'
-                          : 'bg-slate-700/50 border-slate-600'
-                      }`}
-                    >
-                      {!item.processed && (
-                        <input
-                          type="checkbox"
-                          checked={selectedScanItems.includes(item.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedScanItems([...selectedScanItems, item.id]);
-                            } else {
-                              setSelectedScanItems(selectedScanItems.filter(id => id !== item.id));
-                            }
-                          }}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
-                        />
-                      )}
-                      {item.processed && (
-                        <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          {item.media_type === 'movie' ? (
-                            <Film className="h-4 w-4 text-blue-400 flex-shrink-0" />
-                          ) : (
-                            <Tv className="h-4 w-4 text-purple-400 flex-shrink-0" />
-                          )}
-                          <span className="text-white truncate">{item.title}</span>
-                          {item.year && <span className="text-slate-500 text-sm">({item.year})</span>}
+                  {scanResults.map((item) => {
+                    // Determine processing status
+                    const getStatusBadge = () => {
+                      if (!item.processing_status) return null;
+                      switch (item.processing_status) {
+                        case 'pending':
+                          return <span className="text-xs px-2 py-1 rounded-full bg-slate-500/20 text-slate-400">Queued</span>;
+                        case 'waiting':
+                          return <span className="text-xs px-2 py-1 rounded-full bg-yellow-500/20 text-yellow-400 flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Searching{item.search_attempts > 1 ? ` (${item.search_attempts})` : ''}
+                          </span>;
+                        case 'converting':
+                          return <span className="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-400 flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Converting
+                          </span>;
+                        case 'resolved':
+                          if (item.processing_resolution === 'replaced') {
+                            return <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400">Replaced</span>;
+                          } else if (item.processing_resolution === 'converted') {
+                            return <span className="text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-400">Converted</span>;
+                          } else if (item.processing_resolution === 'no_alternate_conversion_disabled') {
+                            return <span className="text-xs px-2 py-1 rounded-full bg-orange-500/20 text-orange-400">No Alt Found</span>;
+                          } else {
+                            return <span className="text-xs px-2 py-1 rounded-full bg-slate-500/20 text-slate-400">{item.processing_resolution || 'Done'}</span>;
+                          }
+                        default:
+                          return null;
+                      }
+                    };
+
+                    const isProcessing = item.processing_status && item.processing_status !== 'resolved';
+                    const isComplete = item.processed || item.processing_status === 'resolved';
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`flex items-center gap-3 p-3 rounded-lg border ${
+                          isComplete
+                            ? 'bg-slate-700/30 border-slate-700/50 opacity-60'
+                            : isProcessing
+                            ? 'bg-slate-700/40 border-yellow-600/30'
+                            : 'bg-slate-700/50 border-slate-600'
+                        }`}
+                      >
+                        {!isComplete && !isProcessing && (
+                          <input
+                            type="checkbox"
+                            checked={selectedScanItems.includes(item.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedScanItems([...selectedScanItems, item.id]);
+                              } else {
+                                setSelectedScanItems(selectedScanItems.filter(id => id !== item.id));
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                          />
+                        )}
+                        {isComplete && (
+                          <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                        )}
+                        {isProcessing && (
+                          <Loader2 className="h-4 w-4 text-yellow-500 flex-shrink-0 animate-spin" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            {item.media_type === 'movie' ? (
+                              <Film className="h-4 w-4 text-blue-400 flex-shrink-0" />
+                            ) : (
+                              <Tv className="h-4 w-4 text-purple-400 flex-shrink-0" />
+                            )}
+                            <span className="text-white truncate">{item.title}</span>
+                            {item.year && <span className="text-slate-500 text-sm">({item.year})</span>}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-1 truncate">{item.reason}</div>
                         </div>
-                        <div className="text-xs text-slate-400 mt-1 truncate">{item.reason}</div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {getStatusBadge()}
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            item.conversion_type === 'dv5' ? 'bg-red-500/20 text-red-400' :
+                            item.conversion_type === 'dv7' ? 'bg-orange-500/20 text-orange-400' :
+                            item.conversion_type === 'dv8' ? 'bg-yellow-500/20 text-yellow-400' :
+                            item.conversion_type === 'av1' ? 'bg-purple-500/20 text-purple-400' :
+                            item.conversion_type === 'mkv_remux' ? 'bg-blue-500/20 text-blue-400' :
+                            'bg-slate-500/20 text-slate-400'
+                          }`}>
+                            {item.conversion_type}
+                          </span>
+                        </div>
                       </div>
-                      <span className={`text-xs px-2 py-1 rounded-full flex-shrink-0 ${
-                        item.conversion_type === 'dv5' ? 'bg-red-500/20 text-red-400' :
-                        item.conversion_type === 'dv7' ? 'bg-orange-500/20 text-orange-400' :
-                        item.conversion_type === 'dv8' ? 'bg-yellow-500/20 text-yellow-400' :
-                        item.conversion_type === 'av1' ? 'bg-purple-500/20 text-purple-400' :
-                        item.conversion_type === 'mkv_remux' ? 'bg-blue-500/20 text-blue-400' :
-                        'bg-slate-500/20 text-slate-400'
-                      }`}>
-                        {item.conversion_type}
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2508,24 +2569,46 @@ export default function SettingsPage() {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                {selectedScanItems.length > 0 && (
-                  <button
-                    onClick={processSelectedItems}
-                    className="btn btn-primary flex items-center gap-2"
-                  >
-                    <Play className="h-4 w-4" />
-                    Process Selected ({selectedScanItems.length})
-                  </button>
-                )}
-                {scanResults.filter(r => !r.processed).length > 0 && (
-                  <button
-                    onClick={processAllItems}
-                    className="btn btn-secondary flex items-center gap-2"
-                  >
-                    <Zap className="h-4 w-4" />
-                    Process All ({scanResults.filter(r => !r.processed).length})
-                  </button>
-                )}
+                {(() => {
+                  // Count items that can still be processed (not processed, not in queue/processing)
+                  const canProcess = scanResults.filter(r =>
+                    !r.processed &&
+                    (!r.processing_status || r.processing_status === 'resolved')
+                  );
+                  const inProgress = scanResults.filter(r =>
+                    r.processing_status &&
+                    r.processing_status !== 'resolved'
+                  );
+
+                  return (
+                    <>
+                      {inProgress.length > 0 && (
+                        <span className="text-sm text-yellow-400 flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {inProgress.length} processing
+                        </span>
+                      )}
+                      {selectedScanItems.length > 0 && (
+                        <button
+                          onClick={processSelectedItems}
+                          className="btn btn-primary flex items-center gap-2"
+                        >
+                          <Play className="h-4 w-4" />
+                          Process Selected ({selectedScanItems.length})
+                        </button>
+                      )}
+                      {canProcess.length > 0 && (
+                        <button
+                          onClick={processAllItems}
+                          className="btn btn-secondary flex items-center gap-2"
+                        >
+                          <Zap className="h-4 w-4" />
+                          Process All ({canProcess.length})
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
