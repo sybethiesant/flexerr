@@ -6,96 +6,235 @@ import HelpTooltip, { HELP_CONTENT } from '../components/HelpTooltip';
 
 // Detailed condition field descriptions for the help modal
 const CONDITION_HELP = {
+  // Watch Status
   watched: {
     label: 'Watched',
     type: 'Yes/No',
     description: 'Whether the content has been watched by at least one user.',
-    details: 'For movies, this means the movie was watched to completion (or past the "watched" threshold in Plex settings). For episodes, it checks if that specific episode was watched. For shows, it considers the show "watched" if any episode has been watched.',
+    details: 'For movies, this means the movie was watched to completion. For episodes, it checks if that specific episode was watched.',
     example: '"Watched is Yes" matches all content that has been viewed at least once.'
   },
   view_count: {
     label: 'View Count',
     type: 'Number',
     description: 'The total number of times content has been watched across all users.',
-    details: 'This counts every view, so if 3 users each watch a movie once, the view count is 3. Useful for identifying rarely-watched content or popular favorites that are rewatched often.',
-    example: '"View Count equals 1" finds content watched exactly once (potential one-and-done).'
+    details: 'Counts every view - if 3 users each watch a movie once, the view count is 3.',
+    example: '"View Count equals 1" finds content watched exactly once.'
+  },
+  watch_progress: {
+    label: 'Watch Progress',
+    type: 'Number (0-100)',
+    description: 'How far through the content the user has watched, as a percentage.',
+    details: 'Useful for finding partially watched content. 0 = not started, 100 = completed.',
+    example: '"Watch Progress less than 50" finds content started but abandoned halfway.'
   },
   days_since_watched: {
     label: 'Days Since Watched',
     type: 'Number',
-    description: 'Number of days since the content was last watched by anyone.',
-    details: 'Calculates the time elapsed since the most recent view by any user. Content that has never been watched will have a very high value (essentially infinite). Useful for cleaning up old watched content.',
+    description: 'Days since the content was last watched by anyone.',
+    details: 'Content never watched returns a very high value (infinity). Great for finding stale content.',
     example: '"Days Since Watched greater than 30" finds content not watched in the last month.'
-  },
-  on_watchlist: {
-    label: 'On Watchlist',
-    type: 'Yes/No',
-    description: 'Whether the content appears on any user\'s watchlist.',
-    details: 'Checks if ANY user has this content on their watchlist. If someone has this content saved, it returns Yes. This is typically used to PROTECT content from deletion.',
-    example: '"On Watchlist is No" matches content nobody has saved to watch later.'
   },
   days_since_activity: {
     label: 'Days Since Activity',
     type: 'Number',
-    description: 'Days since any activity occurred on this content.',
-    details: 'Broader than "Days Since Watched" - includes partial views, paused playback, and other interactions. Useful for finding truly abandoned content that nobody has even started watching recently.',
-    example: '"Days Since Activity greater than 60" finds content with no interaction in 2 months.'
+    description: 'Days since any activity (including partial views, pauses).',
+    details: 'Broader than watched - includes any interaction with the content.',
+    example: '"Days Since Activity greater than 60" finds truly abandoned content.'
   },
+  on_watchlist: {
+    label: 'On Watchlist',
+    type: 'Yes/No',
+    description: 'Whether the content is on any user\'s watchlist.',
+    details: 'Use to PROTECT content users want to keep.',
+    example: '"On Watchlist is No" matches content nobody has saved.'
+  },
+
+  // Dates
   days_since_added: {
     label: 'Days Since Added',
     type: 'Number',
-    description: 'Number of days since the content was added to your Plex library.',
-    details: 'Calculated from when Plex first scanned the media into the library. Useful for cleaning up old content that was never watched, or for protecting recently added content.',
-    example: '"Days Since Added greater than 90" finds content in your library for 3+ months.'
+    description: 'Days since the content was added to your library.',
+    details: 'Based on when Plex first scanned the media.',
+    example: '"Days Since Added greater than 90" finds content in library for 3+ months.'
+  },
+  days_since_release: {
+    label: 'Days Since Release',
+    type: 'Number',
+    description: 'Days since the content was originally released.',
+    details: 'Different from "Days Since Added" - this is the actual release date. Great for keeping newer content longer.',
+    example: '"Days Since Release less than 365" protects content released within the last year.'
   },
   year: {
     label: 'Release Year',
     type: 'Number',
-    description: 'The year the movie or show was originally released.',
-    details: 'Uses the release year from the media metadata. For TV shows, this is typically the year the first episode aired. Useful for cleaning up old content or protecting recent releases.',
-    example: '"Year less than 2015" matches content released before 2015.'
+    description: 'The year the movie or show was released.',
+    details: 'For TV shows, this is the year the first episode aired.',
+    example: '"Year greater than 2020" matches recent content.'
   },
+  duration_minutes: {
+    label: 'Duration',
+    type: 'Number (minutes)',
+    description: 'The runtime of the movie or episode in minutes.',
+    details: 'For shows, this is per-episode duration.',
+    example: '"Duration greater than 120" finds long movies (2+ hours).'
+  },
+
+  // Media Info
   rating: {
     label: 'Rating',
     type: 'Number (0-10)',
     description: 'The audience or critic rating on a 0-10 scale.',
-    details: 'Uses the rating configured in Plex (typically from TMDB, IMDB, or Rotten Tomatoes). Ratings are normalized to a 0-10 scale. Useful for cleaning up poorly-rated content.',
-    example: '"Rating less than 5" matches below-average rated content.'
+    details: 'From TMDB, IMDB, or Rotten Tomatoes depending on Plex settings.',
+    example: '"Rating less than 5" matches below-average content.'
   },
   genre: {
     label: 'Genre',
     type: 'Text',
     description: 'The genre(s) assigned to the content.',
-    details: 'Content can have multiple genres. Use "contains" to match content that includes a specific genre. Matching is case-insensitive. Common genres: Action, Comedy, Drama, Horror, Sci-Fi, Documentary, Animation, etc.',
-    example: '"Genre contains Horror" matches all horror movies/shows.'
+    details: 'Use "contains" - content can have multiple genres. Case-insensitive.',
+    example: '"Genre contains Horror" matches all horror content.'
   },
   content_rating: {
     label: 'Content Rating',
     type: 'Text',
-    description: 'The age/content rating (G, PG, PG-13, R, TV-MA, etc.).',
-    details: 'Uses the certification/content rating from metadata. Common values: G, PG, PG-13, R, NC-17 for movies; TV-Y, TV-G, TV-PG, TV-14, TV-MA for TV shows. Exact match is required.',
-    example: '"Content Rating equals TV-MA" matches mature TV content only.'
+    description: 'Age/content rating (G, PG, PG-13, R, TV-MA, etc.).',
+    details: 'Exact match required.',
+    example: '"Content Rating equals TV-MA" matches mature content only.'
   },
-  file_size_gb: {
-    label: 'File Size (GB)',
+  studio: {
+    label: 'Studio / Network',
+    type: 'Text',
+    description: 'The production studio or TV network.',
+    details: 'Examples: Netflix, HBO, Disney, Warner Bros, etc.',
+    example: '"Studio contains Netflix" matches Netflix Originals.'
+  },
+  language: {
+    label: 'Original Language',
+    type: 'Text',
+    description: 'The original language of the content.',
+    details: 'ISO 639-1 codes (en, es, ja, ko) or full names (English, Spanish).',
+    example: '"Language equals en" matches English-language content.'
+  },
+
+  // TV Shows
+  season_count: {
+    label: 'Season Count',
     type: 'Number',
-    description: 'The total file size of the media in gigabytes.',
-    details: 'For movies, this is the size of the movie file(s). For shows, this is the total size of ALL episodes. Useful for targeting large files when storage is limited.',
-    example: '"File Size greater than 50" finds content using over 50GB of storage.'
+    description: 'Number of seasons a show has.',
+    details: 'Only applies to TV shows.',
+    example: '"Season Count greater than 5" finds long-running shows.'
   },
-  monitored: {
-    label: 'Monitored (Sonarr/Radarr)',
+  episode_count: {
+    label: 'Episode Count',
+    type: 'Number',
+    description: 'Total number of episodes in the show.',
+    details: 'Only applies to TV shows. Counts all episodes across all seasons.',
+    example: '"Episode Count greater than 100" finds shows with lots of episodes.'
+  },
+  is_continuing: {
+    label: 'Still Airing',
     type: 'Yes/No',
-    description: 'Whether the content is being actively monitored in Sonarr or Radarr.',
-    details: 'Monitored content will receive automatic upgrades and (for shows) new episode downloads. Unmonitored content is essentially "archived" in the *arr apps. If not in Sonarr/Radarr, returns No.',
-    example: '"Monitored is No" finds content not being tracked for upgrades.'
+    description: 'Whether the show is still producing new episodes.',
+    details: 'Shows that have ended or been cancelled return No.',
+    example: '"Still Airing is No" matches completed/cancelled shows.'
   },
+
+  // File & Quality
+  file_size_gb: {
+    label: 'File Size',
+    type: 'Number (GB)',
+    description: 'Total file size in gigabytes.',
+    details: 'For shows, this is the total size of ALL episodes.',
+    example: '"File Size greater than 50" finds content using over 50GB.'
+  },
+  resolution: {
+    label: 'Resolution',
+    type: 'Text',
+    description: 'Video resolution (2160, 1080, 720, 480).',
+    details: 'Use contains for partial matching.',
+    example: '"Resolution contains 2160" matches 4K content.'
+  },
+  video_codec: {
+    label: 'Video Codec',
+    type: 'Text',
+    description: 'The video codec used (HEVC, H.264, AV1, etc.).',
+    details: 'Common values: hevc, h264, av1, mpeg4.',
+    example: '"Video Codec contains hevc" matches H.265/HEVC content.'
+  },
+  audio_codec: {
+    label: 'Audio Codec',
+    type: 'Text',
+    description: 'The audio codec used (AAC, DTS, TrueHD, etc.).',
+    details: 'Common values: aac, ac3, dts, truehd, eac3.',
+    example: '"Audio Codec contains truehd" matches lossless audio.'
+  },
+  is_4k: {
+    label: 'Is 4K',
+    type: 'Yes/No',
+    description: 'Whether the content is 4K/UHD resolution.',
+    details: 'Shortcut for checking if resolution is 2160p or higher.',
+    example: '"Is 4K is Yes" matches all 4K content.'
+  },
+  is_hdr: {
+    label: 'Is HDR',
+    type: 'Yes/No',
+    description: 'Whether the content has HDR (Dolby Vision, HDR10, etc.).',
+    details: 'Includes all HDR formats.',
+    example: '"Is HDR is No" matches SDR content only.'
+  },
+
+  // Sonarr/Radarr
+  monitored: {
+    label: 'Monitored',
+    type: 'Yes/No',
+    description: 'Whether actively monitored in Sonarr/Radarr.',
+    details: 'Monitored content receives upgrades and new episodes.',
+    example: '"Monitored is No" finds archived content.'
+  },
+  quality_profile: {
+    label: 'Quality Profile',
+    type: 'Text',
+    description: 'The quality profile name from Sonarr/Radarr.',
+    details: 'Match against your configured quality profile names.',
+    example: '"Quality Profile contains 4K" matches 4K quality profiles.'
+  },
+  tags: {
+    label: 'Has Tag',
+    type: 'Text',
+    description: 'Tags assigned in Sonarr/Radarr.',
+    details: 'Use "contains" to match tag names.',
+    example: '"Has Tag contains archive" matches content tagged for archive.'
+  },
+  root_folder: {
+    label: 'Root Folder',
+    type: 'Text',
+    description: 'The root folder path in Sonarr/Radarr.',
+    details: 'Use to target content in specific storage locations.',
+    example: '"Root Folder contains /old-media/" matches content in old media folder.'
+  },
+
+  // Requests
   has_request: {
     label: 'Has Request',
     type: 'Yes/No',
-    description: 'Whether there\'s an active request for this content in Flexerr.',
-    details: 'Checks if anyone has requested this content through Flexerr. Includes pending, approved, and available requests. Useful for protecting content that was specifically requested by users.',
-    example: '"Has Request is Yes" matches content that was user-requested.'
+    description: 'Whether there\'s a request for this content.',
+    details: 'Checks Flexerr\'s request system.',
+    example: '"Has Request is Yes" protects requested content.'
+  },
+  requested_by: {
+    label: 'Requested By',
+    type: 'Text',
+    description: 'The username who requested the content.',
+    details: 'Match against specific users.',
+    example: '"Requested By equals admin" matches admin-requested content.'
+  },
+  days_since_requested: {
+    label: 'Days Since Requested',
+    type: 'Number',
+    description: 'Days since the content was requested.',
+    details: 'Useful for cleaning up old fulfilled requests.',
+    example: '"Days Since Requested greater than 180" finds old requests.'
   }
 };
 
@@ -194,19 +333,50 @@ const TARGET_TYPES = [
 ];
 
 const CONDITION_FIELDS = [
-  { value: 'watched', label: 'Watched', type: 'boolean' },
-  { value: 'view_count', label: 'View Count', type: 'number' },
-  { value: 'days_since_watched', label: 'Days Since Watched', type: 'number' },
-  { value: 'on_watchlist', label: 'On Watchlist', type: 'boolean' },
-  { value: 'days_since_activity', label: 'Days Since Activity', type: 'number' },
-  { value: 'days_since_added', label: 'Days Since Added', type: 'number' },
-  { value: 'year', label: 'Release Year', type: 'number' },
-  { value: 'rating', label: 'Rating', type: 'number' },
-  { value: 'genre', label: 'Genre', type: 'text' },
-  { value: 'content_rating', label: 'Content Rating', type: 'text' },
-  { value: 'file_size_gb', label: 'File Size (GB)', type: 'number' },
-  { value: 'monitored', label: 'Monitored (Sonarr/Radarr)', type: 'boolean' },
-  { value: 'has_request', label: 'Has Request', type: 'boolean' }
+  // Watch status
+  { value: 'watched', label: 'Watched', type: 'boolean', category: 'Watch Status' },
+  { value: 'view_count', label: 'View Count', type: 'number', category: 'Watch Status' },
+  { value: 'watch_progress', label: 'Watch Progress (%)', type: 'number', category: 'Watch Status' },
+  { value: 'days_since_watched', label: 'Days Since Watched', type: 'number', category: 'Watch Status' },
+  { value: 'days_since_activity', label: 'Days Since Activity', type: 'number', category: 'Watch Status' },
+  { value: 'on_watchlist', label: 'On Watchlist', type: 'boolean', category: 'Watch Status' },
+
+  // Dates & Time
+  { value: 'days_since_added', label: 'Days Since Added', type: 'number', category: 'Dates' },
+  { value: 'days_since_release', label: 'Days Since Release', type: 'number', category: 'Dates' },
+  { value: 'year', label: 'Release Year', type: 'number', category: 'Dates' },
+  { value: 'duration_minutes', label: 'Duration (minutes)', type: 'number', category: 'Dates' },
+
+  // Media Info
+  { value: 'rating', label: 'Rating (0-10)', type: 'number', category: 'Media Info' },
+  { value: 'genre', label: 'Genre', type: 'text', category: 'Media Info' },
+  { value: 'content_rating', label: 'Content Rating', type: 'text', category: 'Media Info' },
+  { value: 'studio', label: 'Studio / Network', type: 'text', category: 'Media Info' },
+  { value: 'language', label: 'Original Language', type: 'text', category: 'Media Info' },
+
+  // TV Shows
+  { value: 'season_count', label: 'Season Count', type: 'number', category: 'TV Shows' },
+  { value: 'episode_count', label: 'Episode Count', type: 'number', category: 'TV Shows' },
+  { value: 'is_continuing', label: 'Still Airing', type: 'boolean', category: 'TV Shows' },
+
+  // File & Quality
+  { value: 'file_size_gb', label: 'File Size (GB)', type: 'number', category: 'File & Quality' },
+  { value: 'resolution', label: 'Resolution', type: 'text', category: 'File & Quality' },
+  { value: 'video_codec', label: 'Video Codec', type: 'text', category: 'File & Quality' },
+  { value: 'audio_codec', label: 'Audio Codec', type: 'text', category: 'File & Quality' },
+  { value: 'is_4k', label: 'Is 4K', type: 'boolean', category: 'File & Quality' },
+  { value: 'is_hdr', label: 'Is HDR', type: 'boolean', category: 'File & Quality' },
+
+  // Sonarr/Radarr
+  { value: 'monitored', label: 'Monitored', type: 'boolean', category: 'Sonarr/Radarr' },
+  { value: 'quality_profile', label: 'Quality Profile', type: 'text', category: 'Sonarr/Radarr' },
+  { value: 'tags', label: 'Has Tag', type: 'text', category: 'Sonarr/Radarr' },
+  { value: 'root_folder', label: 'Root Folder', type: 'text', category: 'Sonarr/Radarr' },
+
+  // Requests
+  { value: 'has_request', label: 'Has Request', type: 'boolean', category: 'Requests' },
+  { value: 'requested_by', label: 'Requested By', type: 'text', category: 'Requests' },
+  { value: 'days_since_requested', label: 'Days Since Requested', type: 'number', category: 'Requests' }
 ];
 
 const OPERATORS = {
@@ -467,6 +637,7 @@ export default function RuleEditor() {
                 value={rule.name}
                 onChange={(e) => setRule(prev => ({ ...prev, name: e.target.value }))}
                 placeholder="e.g., Watched Movies Cleanup"
+                className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
               />
             </div>
 
@@ -480,6 +651,7 @@ export default function RuleEditor() {
                 onChange={(e) => setRule(prev => ({ ...prev, description: e.target.value }))}
                 rows={2}
                 placeholder="What does this rule do?"
+                className="bg-slate-700 border-slate-600 text-white placeholder-slate-400"
               />
             </div>
 
@@ -492,9 +664,10 @@ export default function RuleEditor() {
                 <select
                   value={rule.target_type}
                   onChange={(e) => setRule(prev => ({ ...prev, target_type: e.target.value }))}
+                  className="bg-slate-700 border-slate-600 text-white"
                 >
                   {TARGET_TYPES.map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                    <option key={t.value} value={t.value} className="bg-slate-800 text-white">{t.label}</option>
                   ))}
                 </select>
               </div>
@@ -509,6 +682,7 @@ export default function RuleEditor() {
                   min="0"
                   value={rule.buffer_days}
                   onChange={(e) => setRule(prev => ({ ...prev, buffer_days: parseInt(e.target.value) || 0 }))}
+                  className="bg-slate-700 border-slate-600 text-white"
                 />
               </div>
             </div>
@@ -555,20 +729,25 @@ export default function RuleEditor() {
                             value: newType === 'boolean' ? true : newType === 'number' ? 0 : ''
                           });
                         }}
-                        className="flex-1"
+                        className="flex-1 bg-slate-700 border-slate-600 text-white"
                       >
-                        {CONDITION_FIELDS.map(f => (
-                          <option key={f.value} value={f.value}>{f.label}</option>
+                        {/* Group options by category */}
+                        {[...new Set(CONDITION_FIELDS.map(f => f.category))].map(category => (
+                          <optgroup key={category} label={category} className="bg-slate-800 text-slate-300">
+                            {CONDITION_FIELDS.filter(f => f.category === category).map(f => (
+                              <option key={f.value} value={f.value} className="bg-slate-800 text-white">{f.label}</option>
+                            ))}
+                          </optgroup>
                         ))}
                       </select>
 
                       <select
                         value={condition.operator}
                         onChange={(e) => updateCondition(index, { operator: e.target.value })}
-                        className="w-40"
+                        className="w-40 bg-slate-700 border-slate-600 text-white"
                       >
                         {operators.map(o => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
+                          <option key={o.value} value={o.value} className="bg-slate-800 text-white">{o.label}</option>
                         ))}
                       </select>
 
@@ -576,24 +755,24 @@ export default function RuleEditor() {
                         <select
                           value={condition.value ? 'true' : 'false'}
                           onChange={(e) => updateCondition(index, { value: e.target.value === 'true' })}
-                          className="w-24"
+                          className="w-24 bg-slate-700 border-slate-600 text-white"
                         >
-                          <option value="true">Yes</option>
-                          <option value="false">No</option>
+                          <option value="true" className="bg-slate-800 text-white">Yes</option>
+                          <option value="false" className="bg-slate-800 text-white">No</option>
                         </select>
                       ) : fieldType === 'number' ? (
                         <input
                           type="number"
                           value={condition.value}
                           onChange={(e) => updateCondition(index, { value: parseFloat(e.target.value) || 0 })}
-                          className="w-24"
+                          className="w-24 bg-slate-700 border-slate-600 text-white"
                         />
                       ) : (
                         <input
                           type="text"
                           value={condition.value}
                           onChange={(e) => updateCondition(index, { value: e.target.value })}
-                          className="w-40"
+                          className="w-40 bg-slate-700 border-slate-600 text-white placeholder-slate-400"
                         />
                       )}
 
@@ -670,7 +849,7 @@ export default function RuleEditor() {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => toggleAction(action.value)}
-                        className="rounded"
+                        className="rounded w-4 h-4 bg-slate-700 border-slate-600 text-primary-600 focus:ring-primary-500 focus:ring-offset-slate-800"
                       />
                       <span>{action.label}</span>
                     </label>
@@ -692,7 +871,7 @@ export default function RuleEditor() {
                                 )
                               }));
                             }}
-                            className="rounded"
+                            className="rounded w-4 h-4 bg-slate-700 border-slate-600 text-primary-600 focus:ring-primary-500 focus:ring-offset-slate-800"
                           />
                           <span className="text-slate-300">Add to import exclusion list</span>
                           <span className="text-slate-500 text-xs">(prevents auto re-add from import lists)</span>
@@ -731,7 +910,7 @@ export default function RuleEditor() {
                 type="checkbox"
                 checked={rule.is_active}
                 onChange={(e) => setRule(prev => ({ ...prev, is_active: e.target.checked }))}
-                className="rounded"
+                className="rounded w-4 h-4 bg-slate-700 border-slate-600 text-primary-600 focus:ring-primary-500"
               />
               <span className="flex-1">
                 Rule is active
@@ -749,6 +928,7 @@ export default function RuleEditor() {
                 min="0"
                 value={rule.priority}
                 onChange={(e) => setRule(prev => ({ ...prev, priority: parseInt(e.target.value) || 0 }))}
+                className="bg-slate-700 border-slate-600 text-white"
               />
             </div>
           </div>
@@ -781,7 +961,7 @@ export default function RuleEditor() {
                             : ids.filter(id => id !== lib.id)
                         }));
                       }}
-                      className="rounded"
+                      className="rounded w-4 h-4 bg-slate-700 border-slate-600 text-primary-600 focus:ring-primary-500 focus:ring-offset-slate-800"
                     />
                     <span>{lib.title}</span>
                   </label>
