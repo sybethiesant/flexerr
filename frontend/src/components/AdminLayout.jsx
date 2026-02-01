@@ -6,13 +6,15 @@ import {
   Trash2,
   Users,
   FileText,
-  LayoutDashboard
+  LayoutDashboard,
+  FolderTree
 } from 'lucide-react';
 
 const adminNavItems = [
   { path: '/admin', label: 'Overview', icon: LayoutDashboard, exact: true },
   { path: '/admin/settings', label: 'Settings', icon: Settings },
-  { path: '/admin/rules', label: 'Rules', icon: ListChecks },
+  { path: '/admin/rules', label: 'Cleanup Rules', icon: ListChecks },
+  { path: '/admin/categorization', label: 'Categorization', icon: FolderTree },
   { path: '/admin/queue', label: 'Queue', icon: Trash2 },
   { path: '/admin/users', label: 'Users', icon: Users },
   { path: '/admin/logs', label: 'Logs', icon: FileText },

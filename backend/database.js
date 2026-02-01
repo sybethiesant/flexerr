@@ -1077,6 +1077,54 @@ const runMigrations = () => {
   `);
 
   console.log('[Database] Plex invitations table initialized');
+
+  // =====================================================
+  // Categorization Rules Table
+  // =====================================================
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS categorization_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      target_type TEXT NOT NULL,
+      conditions JSON NOT NULL,
+      radarr_root_folder TEXT,
+      radarr_quality_profile_id INTEGER,
+      radarr_tags JSON,
+      sonarr_root_folder TEXT,
+      sonarr_quality_profile_id INTEGER,
+      sonarr_tags JSON,
+      priority INTEGER DEFAULT 0,
+      is_active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_matched_count INTEGER DEFAULT 0
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_categorization_rules_active ON categorization_rules(is_active);
+    CREATE INDEX IF NOT EXISTS idx_categorization_rules_priority ON categorization_rules(priority DESC);
+    CREATE INDEX IF NOT EXISTS idx_categorization_rules_target ON categorization_rules(target_type);
+  `);
+
+  // Migration: Add mode and collection_name columns for Plex Collections support
+  const catColumns = db.prepare("PRAGMA table_info(categorization_rules)").all();
+  const catColumnNames = catColumns.map(c => c.name);
+
+  if (!catColumnNames.includes('mode')) {
+    db.exec("ALTER TABLE categorization_rules ADD COLUMN mode TEXT DEFAULT 'collection'");
+    // Set existing rules to 'library' mode to preserve their behavior
+    db.exec("UPDATE categorization_rules SET mode = 'library' WHERE mode IS NULL OR mode = 'collection'");
+    console.log('[Database] Added mode column to categorization_rules');
+  }
+
+  if (!catColumnNames.includes('collection_name')) {
+    db.exec("ALTER TABLE categorization_rules ADD COLUMN collection_name TEXT");
+    console.log('[Database] Added collection_name column to categorization_rules');
+  }
+
+  console.log('[Database] Categorization rules table initialized');
 };
 
 // Helper functions

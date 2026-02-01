@@ -174,6 +174,12 @@ class SonarrService {
     return response.data;
   }
 
+  async addRootFolder(path) {
+    const response = await this.client.post('/rootfolder', { path });
+    log('info', 'categorization', `Added root folder to Sonarr (${this.name})`, { details: { path } });
+    return response.data;
+  }
+
   async getImportListExclusions() {
     const response = await this.client.get('/importlistexclusion');
     return response.data;
@@ -251,6 +257,41 @@ class SonarrService {
       title: response.data.title
     });
 
+    return response.data;
+  }
+
+  async updateSeries(seriesId, updates) {
+    // First get the current series data
+    const getResponse = await this.client.get(`/series/${seriesId}`);
+    const seriesData = getResponse.data;
+
+    // Apply updates
+    const updatedSeries = {
+      ...seriesData,
+      ...updates
+    };
+
+    // If moveFiles is specified, we need to use the series editor endpoint
+    if (updates.moveFiles && updates.rootFolderPath) {
+      const response = await this.client.put('/series/editor', {
+        seriesIds: [seriesId],
+        rootFolderPath: updates.rootFolderPath,
+        moveFiles: true
+      });
+      log('info', 'categorization', `Moved series to new root folder in Sonarr (${this.name})`, {
+        media_id: seriesId,
+        title: seriesData.title,
+        newRootFolder: updates.rootFolderPath
+      });
+      return response.data;
+    }
+
+    // Standard update
+    const response = await this.client.put(`/series/${seriesId}`, updatedSeries);
+    log('info', 'categorization', `Updated series in Sonarr (${this.name})`, {
+      media_id: seriesId,
+      title: seriesData.title
+    });
     return response.data;
   }
 

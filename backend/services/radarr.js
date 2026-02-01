@@ -143,6 +143,12 @@ class RadarrService {
     return response.data;
   }
 
+  async addRootFolder(path) {
+    const response = await this.client.post('/rootfolder', { path });
+    log('info', 'categorization', `Added root folder to Radarr (${this.name})`, { details: { path } });
+    return response.data;
+  }
+
   async getImportListExclusions() {
     const response = await this.client.get('/exclusions');
     return response.data;
@@ -215,6 +221,41 @@ class RadarrService {
       title: response.data.title
     });
 
+    return response.data;
+  }
+
+  async updateMovie(movieId, updates) {
+    // First get the current movie data
+    const getResponse = await this.client.get(`/movie/${movieId}`);
+    const movieData = getResponse.data;
+
+    // Apply updates
+    const updatedMovie = {
+      ...movieData,
+      ...updates
+    };
+
+    // If moveFiles is specified, we need to use the movie editor endpoint
+    if (updates.moveFiles && updates.rootFolderPath) {
+      const response = await this.client.put('/movie/editor', {
+        movieIds: [movieId],
+        rootFolderPath: updates.rootFolderPath,
+        moveFiles: true
+      });
+      log('info', 'categorization', `Moved movie to new root folder in Radarr (${this.name})`, {
+        media_id: movieId,
+        title: movieData.title,
+        newRootFolder: updates.rootFolderPath
+      });
+      return response.data;
+    }
+
+    // Standard update
+    const response = await this.client.put(`/movie/${movieId}`, updatedMovie);
+    log('info', 'categorization', `Updated movie in Radarr (${this.name})`, {
+      media_id: movieId,
+      title: movieData.title
+    });
     return response.data;
   }
 
