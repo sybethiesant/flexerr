@@ -389,14 +389,23 @@ export default function LeavingSoon() {
   };
 
   const protectItem = async (item) => {
+    if (!item.tmdb_id) {
+      console.error('Cannot protect item without TMDB ID');
+      return;
+    }
     setProtecting(item.id);
     try {
-      const res = await api.post(`/leaving-soon/${item.id}/protect`);
-      if (res.data.success) {
-        // Update item in list
+      // Use manual protection API - this bypasses all rules
+      const mediaType = item.media_type === 'episode' ? 'tv' : item.media_type;
+      const res = await api.post(`/protection/${mediaType}/${item.tmdb_id}`, {
+        title: item.title,
+        protect: true
+      });
+      if (res.data.protected) {
+        // Update item in list to show protected status
         setItems(items.map(i =>
           i.id === item.id
-            ? { ...i, onYourWatchlist: true, isProtected: true, protectedBy: [...(i.protectedBy || []), user?.username || 'You'] }
+            ? { ...i, isProtected: true, protectedBy: [...(i.protectedBy || []), user?.username || 'You'] }
             : i
         ));
       }
@@ -433,7 +442,7 @@ export default function LeavingSoon() {
             <span>Leaving Soon</span>
           </h1>
           <p className="text-slate-400 mt-1">
-            Content scheduled for removal. Add to your watchlist to keep it!
+            Content scheduled for removal based on your cleanup rules.
           </p>
         </div>
       </div>
@@ -567,23 +576,23 @@ export default function LeavingSoon() {
                           <BarChart3 className="h-4 w-4" />
                         </button>
                       )}
-                      {item.onYourWatchlist ? (
-                        <span className="inline-flex items-center space-x-1 px-3 py-2 bg-green-500/20 text-green-400 rounded-lg text-sm">
-                          <Heart className="h-4 w-4 fill-current" />
-                          <span>On Watchlist</span>
+                      {item.isProtected ? (
+                        <span className="inline-flex items-center space-x-1 px-3 py-2 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm">
+                          <Shield className="h-4 w-4 fill-current" />
+                          <span>Protected</span>
                         </span>
                       ) : (
                         <button
                           onClick={() => protectItem(item)}
                           disabled={protecting === item.id || !item.tmdb_id}
-                          className="inline-flex items-center space-x-1 px-3 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-sm transition-colors"
+                          className="inline-flex items-center space-x-1 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-sm transition-colors"
                         >
                           {protecting === item.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
-                            <Heart className="h-4 w-4" />
+                            <Shield className="h-4 w-4" />
                           )}
-                          <span>Keep It</span>
+                          <span>Protect</span>
                         </button>
                       )}
                     </div>
@@ -630,8 +639,8 @@ export default function LeavingSoon() {
             <p className="font-medium text-slate-300 mb-1">How it works</p>
             <p>
               Content is automatically scheduled for removal based on your cleanup rules.
-              Click "Keep It" to add an item to your watchlist, which will protect it from deletion
-              and trigger a re-download if needed.
+              Click "Protect" to permanently bypass all cleanup rules for that item.
+              Protection can be removed from the media's detail page.
             </p>
           </div>
         </div>
