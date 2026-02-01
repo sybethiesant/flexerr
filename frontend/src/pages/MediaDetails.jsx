@@ -5,7 +5,7 @@ import {
   ArrowLeft, Star, Clock, Calendar, Heart, Check, Loader2,
   Film, Tv, Play, ExternalLink, Users, AlertCircle, Wrench, X,
   AlertTriangle, Zap, Trash2, RefreshCw, ChevronRight, ChevronLeft,
-  Eye, EyeOff, MonitorPlay, BarChart3, Database, Activity, Shield, ShieldCheck
+  Eye, EyeOff, MonitorPlay, BarChart3, Database, Activity, Shield, ShieldCheck, Layers
 } from 'lucide-react';
 
 // Season Episodes Modal - Shows episodes with watch buttons
@@ -834,6 +834,25 @@ function StatsModal({ isOpen, onClose, tmdbId, mediaType, title, isProtected }) 
                       </div>
                     )}
                   </div>
+                  {/* Collections */}
+                  {stats.plex_info.collections?.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-600">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Layers className="h-4 w-4 text-primary-400" />
+                        <span className="text-sm text-slate-400">Collections</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {stats.plex_info.collections.map((col, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-1 bg-primary-500/20 text-primary-400 rounded text-xs"
+                          >
+                            {col}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

@@ -3203,6 +3203,10 @@ app.get('/api/stats/media/:mediaType/:tmdbId', authenticate, async (req, res) =>
             if (match) {
               // Get detailed info for this item
               const details = await plex.getItem(match.ratingKey);
+              // Get full metadata including collections
+              const fullMeta = await plex.client.get(`/library/metadata/${match.ratingKey}`);
+              const fullDetails = fullMeta.data?.MediaContainer?.Metadata?.[0] || details;
+
               stats.plex_info = {
                 rating_key: match.ratingKey,
                 view_count: details?.viewCount || 0,
@@ -3210,7 +3214,8 @@ app.get('/api/stats/media/:mediaType/:tmdbId', authenticate, async (req, res) =>
                 added_at: details?.addedAt ? new Date(details.addedAt * 1000).toISOString() : null,
                 file_size: details?.Media?.[0]?.Part?.[0]?.size || 0,
                 resolution: details?.Media?.[0]?.videoResolution || null,
-                video_codec: details?.Media?.[0]?.videoCodec || null
+                video_codec: details?.Media?.[0]?.videoCodec || null,
+                collections: fullDetails?.Collection?.map(c => c.tag) || []
               };
 
               // Get velocity data using the Plex ratingKey (for TV shows)
