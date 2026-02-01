@@ -235,11 +235,18 @@ function MainLayout({ children, showSearch = true }) {
 function AppRoutes() {
   const [setupStatus, setSetupStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [apiError, setApiError] = useState(false);
 
   useEffect(() => {
     api.get('/setup/status')
       .then(res => setSetupStatus(res.data))
-      .catch(console.error)
+      .catch(err => {
+        console.error('Setup status check failed:', err);
+        // On API error (rate limiting, network issues), assume setup is complete
+        // to prevent incorrectly showing setup screen
+        setApiError(true);
+        setSetupStatus({ setupComplete: true, hasUsers: true, hasTmdbKey: true });
+      })
       .finally(() => setLoading(false));
   }, []);
 
