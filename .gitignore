@@ -47,6 +47,7 @@ coverage/
 !README.md
 !CHANGELOG.md
 !AUDIT_LOG.md
+!DOCKERHUB.md
 
 # Development files
 flexerr/
