@@ -2230,6 +2230,43 @@ app.post('/api/queue/:id/delete-now', authenticate, requireAdmin, async (req, re
   }
 });
 
+// Extend queue item buffer period
+app.post('/api/queue/:id/extend', authenticate, (req, res) => {
+  try {
+    const { days = 7 } = req.body;
+    const item = db.prepare('SELECT * FROM queue_items WHERE id = ?').get(req.params.id);
+
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    if (item.status !== 'pending') {
+      return res.status(400).json({ error: 'Can only extend pending items' });
+    }
+
+    // Extend the action_at date by the specified number of days
+    const currentActionAt = new Date(item.action_at);
+    const newActionAt = new Date(currentActionAt.getTime() + (days * 24 * 60 * 60 * 1000));
+
+    db.prepare('UPDATE queue_items SET action_at = ? WHERE id = ?').run(
+      newActionAt.toISOString(),
+      req.params.id
+    );
+
+    log('info', 'rule', `Extended buffer by ${days} days`, {
+      media_title: item.title,
+      user_id: req.user.userId,
+      old_action_at: item.action_at,
+      new_action_at: newActionAt.toISOString()
+    });
+
+    res.json({ success: true, new_action_at: newActionAt.toISOString() });
+  } catch (error) {
+    console.error('[API] Extend queue item error:', error);
+    res.status(500).json({ error: 'Failed to extend buffer' });
+  }
+});
+
 // =========================
 // WEBHOOKS ROUTES (Admin Only)
 // =========================

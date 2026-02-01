@@ -241,7 +241,7 @@ function ScheduleInput({ value, onChange }) {
   );
 }
 
-function ServiceCard({ service, onTest, onEdit, onDelete, testing }) {
+function ServiceCard({ service, onTest, onEdit, onDelete, testing, testResult }) {
   const getServiceIcon = (type) => {
     switch (type) {
       case 'plex':
@@ -301,17 +301,31 @@ function ServiceCard({ service, onTest, onEdit, onDelete, testing }) {
             {service.api_key && (
               <p className="text-xs text-slate-500 mt-1">API Key: {service.api_key}</p>
             )}
+            {testResult && (
+              <div className={`flex items-center gap-1 mt-1 text-xs ${testResult.success ? 'text-green-400' : 'text-red-400'}`}>
+                {testResult.success ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                <span>{testResult.success ? 'Connected' : testResult.error || 'Failed'}</span>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => onTest(service)}
             disabled={testing === service.id}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-600 rounded-lg transition-colors"
+            className={`p-2 rounded-lg transition-colors ${
+              testResult?.success ? 'text-green-400 hover:text-green-300 hover:bg-slate-600' :
+              testResult && !testResult.success ? 'text-red-400 hover:text-red-300 hover:bg-slate-600' :
+              'text-slate-400 hover:text-white hover:bg-slate-600'
+            }`}
             title="Test Connection"
           >
             {testing === service.id ? (
               <Loader2 className="h-4 w-4 animate-spin" />
+            ) : testResult?.success ? (
+              <CheckCircle className="h-4 w-4" />
+            ) : testResult && !testResult.success ? (
+              <XCircle className="h-4 w-4" />
             ) : (
               <RefreshCw className="h-4 w-4" />
             )}
@@ -518,6 +532,7 @@ export default function SettingsPage() {
   const [services, setServices] = useState([]);
   const [loadingServices, setLoadingServices] = useState(true);
   const [testingService, setTestingService] = useState(null);
+  const [serviceTestResults, setServiceTestResults] = useState({});
   const [editingService, setEditingService] = useState(null);
   const [addingService, setAddingService] = useState(false);
 
@@ -792,15 +807,19 @@ export default function SettingsPage() {
 
   const handleTestService = async (service) => {
     setTestingService(service.id);
+    setServiceTestResults(prev => ({ ...prev, [service.id]: null })); // Clear previous result
     try {
       const res = await api.post(`/services/${service.id}/test`);
+      setServiceTestResults(prev => ({ ...prev, [service.id]: res.data }));
       if (res.data.success) {
         toast.success(`${service.name}: Connected successfully`);
       } else {
         toast.error(`${service.name}: ${res.data.error}`);
       }
     } catch (err) {
-      toast.error(`${service.name}: ${err.response?.data?.error || err.message}`);
+      const errorResult = { success: false, error: err.response?.data?.error || err.message };
+      setServiceTestResults(prev => ({ ...prev, [service.id]: errorResult }));
+      toast.error(`${service.name}: ${errorResult.error}`);
     } finally {
       setTestingService(null);
     }
@@ -1145,6 +1164,7 @@ export default function SettingsPage() {
                   onEdit={setEditingService}
                   onDelete={handleDeleteService}
                   testing={testingService}
+                  testResult={serviceTestResults[mediaServer.id]}
                 />
               ) : (
                 <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
@@ -1174,6 +1194,7 @@ export default function SettingsPage() {
                       onEdit={setEditingService}
                       onDelete={handleDeleteService}
                       testing={testingService}
+                      testResult={serviceTestResults[service.id]}
                     />
                   ))}
                 </div>
