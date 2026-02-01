@@ -104,7 +104,7 @@ class MediaConverterService {
       return { restarted: 0 };
     }
 
-    console.log('[MediaConverter] Found ' + interrupted.length + ' interrupted job(s), restarting...');
+    console.log('[MediaConverter] Found ' + interrupted.length + ' interrupted job(s), resetting to pending...');
 
     // Clean up any temp files from interrupted jobs
     await this.cleanupTempFiles();
@@ -120,22 +120,29 @@ class MediaConverterService {
         continue;
       }
 
-      // Reset status to pending and re-queue
+      // Reset status to pending - the queue will pick them up one at a time
       db.prepare(`UPDATE conversion_jobs SET status = 'pending' WHERE id = ?`).run(job.id);
-
-      this.addToQueue({
-        jobId: job.id,
-        filePath: job.file_path,
-        title: job.title,
-        mediaType: job.media_type,
-        tmdbId: job.tmdb_id,
-        type: job.conversion_type,
-        reason: job.reason,
-        duration: job.duration
-      });
-
-      console.log('[MediaConverter] Restarted job ' + job.id + ': ' + job.title);
+      console.log('[MediaConverter] Reset job ' + job.id + ' to pending: ' + job.title);
       restarted++;
+    }
+
+    // Start processing the queue (will respect max_jobs limit)
+    if (restarted > 0) {
+      // Queue the first pending job only - processQueue will handle the rest
+      const firstPending = db.prepare(`SELECT * FROM conversion_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`).get();
+      if (firstPending) {
+        db.prepare(`UPDATE conversion_jobs SET status = 'processing' WHERE id = ?`).run(firstPending.id);
+        this.addToQueue({
+          jobId: firstPending.id,
+          filePath: firstPending.file_path,
+          title: firstPending.title,
+          mediaType: firstPending.media_type,
+          tmdbId: firstPending.tmdb_id,
+          type: firstPending.conversion_type,
+          reason: firstPending.reason,
+          duration: firstPending.duration
+        });
+      }
     }
 
     return { restarted };
@@ -401,8 +408,8 @@ class MediaConverterService {
       args.push('-map', '0');
       args.push('-y', outputPath);
 
-      console.log('[MediaConverter] Running: ffmpeg ' + args.join(' '));
-      const ffmpeg = spawn('ffmpeg', args);
+      console.log('[MediaConverter] Running: nice -n 19 ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
       let stderr = '';
 
       ffmpeg.stderr.on('data', (data) => {
@@ -467,8 +474,8 @@ class MediaConverterService {
         '-y', outputPath
       ];
 
-      console.log('[MediaConverter] Remuxing MKV to MP4: ffmpeg ' + args.join(' '));
-      const ffmpeg = spawn('ffmpeg', args);
+      console.log('[MediaConverter] Remuxing MKV to MP4: nice -n 19 ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
       let stderr = '';
 
       ffmpeg.stderr.on('data', (data) => {
@@ -531,8 +538,8 @@ class MediaConverterService {
       args.push('-map', '0');
       args.push('-y', outputPath);
 
-      console.log('[MediaConverter] Converting AV1 to HEVC: ffmpeg ' + args.join(' '));
-      const ffmpeg = spawn('ffmpeg', args);
+      console.log('[MediaConverter] Converting AV1 to HEVC: nice -n 19 ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
       let stderr = '';
 
       ffmpeg.stderr.on('data', (data) => {
@@ -579,8 +586,8 @@ class MediaConverterService {
         '-y', outputPath
       ];
 
-      console.log('[MediaConverter] Converting audio to EAC3: ffmpeg ' + args.join(' '));
-      const ffmpeg = spawn('ffmpeg', args);
+      console.log('[MediaConverter] Converting audio to EAC3: nice -n 19 ffmpeg ' + args.join(' '));
+      const ffmpeg = spawn('nice', ['-n', '19', 'ffmpeg', ...args]);
       let stderr = '';
 
       ffmpeg.stderr.on('data', (data) => {
@@ -682,11 +689,34 @@ class MediaConverterService {
   }
 
   async processQueue() {
-    if (this.activeJobs >= this.maxJobs || this.jobQueue.length === 0) {
+    if (this.activeJobs >= this.maxJobs) {
       return;
     }
 
-    const job = this.jobQueue.shift();
+    // First check in-memory queue
+    let job = this.jobQueue.shift();
+
+    // If no in-memory jobs, check database for pending jobs
+    if (!job) {
+      const pending = db.prepare(`SELECT * FROM conversion_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`).get();
+      if (pending) {
+        job = {
+          jobId: pending.id,
+          filePath: pending.file_path,
+          title: pending.title,
+          mediaType: pending.media_type,
+          tmdbId: pending.tmdb_id,
+          type: pending.conversion_type,
+          reason: pending.reason,
+          duration: pending.duration
+        };
+      }
+    }
+
+    if (!job) {
+      return;
+    }
+
     this.activeJobs++;
 
     try {
