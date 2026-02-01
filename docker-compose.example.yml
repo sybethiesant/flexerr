@@ -1,0 +1,45 @@
+# Flexerr - Example Docker Compose
+# Copy this file to docker-compose.yml and customize as needed
+#
+# Quick start:
+#   docker compose up -d
+#
+# Then open http://localhost:3100 in your browser
+
+services:
+  flexerr:
+    image: sybersects/flexerr:latest
+    container_name: flexerr
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - flexerr-data:/app/data
+      # Optional: Mount media folder for Auto Convert feature
+      # - /path/to/your/media:/Media
+    environment:
+      - TZ=America/Los_Angeles
+      - PORT=3100
+      - NODE_ENV=production
+      # Optional: Set a fixed JWT secret (auto-generated if not set)
+      # - JWT_SECRET=your-secret-here
+
+    # ============================================
+    # GPU ACCESS FOR HARDWARE-ACCELERATED ENCODING
+    # ============================================
+    # Uncomment ONE of the following GPU configurations:
+
+    # --- NVIDIA GPU (RTX/GTX cards with NVENC) ---
+    # Requires: NVIDIA Container Toolkit installed on host
+    # runtime: nvidia
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=all
+    #   - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+    # --- AMD/Intel GPU (VAAPI) ---
+    # devices:
+    #   - /dev/dri:/dev/dri
+
+volumes:
+  flexerr-data:
+    name: flexerr-data

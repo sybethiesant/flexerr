@@ -9,6 +9,12 @@
 </p>
 
 <p align="center">
+  <a href="https://hub.docker.com/r/sybersects/flexerr"><img src="https://img.shields.io/docker/pulls/sybersects/flexerr?style=flat-square&logo=docker" alt="Docker Pulls"></a>
+  <a href="https://hub.docker.com/r/sybersects/flexerr"><img src="https://img.shields.io/docker/v/sybersects/flexerr?style=flat-square&logo=docker&label=version" alt="Docker Version"></a>
+  <a href="https://github.com/sybersects/flexerr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/sybersects/flexerr?style=flat-square" alt="License"></a>
+</p>
+
+<p align="center">
   <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#configuration">Configuration</a> •
@@ -64,14 +70,25 @@ User Watchlist → Auto-Download → Watch → VIPER Cleanup → Re-watchlist Re
 
 ### Installation
 
-1. Clone the repository:
+**Option 1: Docker Hub (Recommended)**
+
 ```bash
-git clone https://github.com/sybethiesant/flexerr.git
-cd flexerr
+# Create a directory for Flexerr
+mkdir flexerr && cd flexerr
+
+# Download the example compose file
+curl -O https://raw.githubusercontent.com/sybersects/flexerr/main/docker-compose.example.yml
+mv docker-compose.example.yml docker-compose.yml
+
+# Start Flexerr
+docker compose up -d
 ```
 
-2. Start Flexerr:
+**Option 2: Build from Source**
+
 ```bash
+git clone https://github.com/sybersects/flexerr.git
+cd flexerr
 docker compose up -d
 ```
 
@@ -494,5 +511,5 @@ MIT License - see [LICENSE](LICENSE) file.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/sybethiesant/flexerr/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/sybethiesant/flexerr/discussions)
+- **Issues**: [GitHub Issues](https://github.com/sybersects/flexerr/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/sybersects/flexerr/discussions)
