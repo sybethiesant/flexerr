@@ -120,7 +120,7 @@ class RulesEngine {
         itemValue = context.onWatchlist || false;
         break;
 
-      // Media conditions
+      // Date & Time conditions
       case 'days_since_added':
         if (!item.addedAt) {
           itemValue = 0;
@@ -129,9 +129,28 @@ class RulesEngine {
           itemValue = Math.floor((Date.now() - addedAt.getTime()) / (1000 * 60 * 60 * 24));
         }
         break;
+      case 'days_since_release':
+        // Calculate days since original release date
+        if (item.originallyAvailableAt) {
+          const releaseDate = new Date(item.originallyAvailableAt);
+          itemValue = Math.floor((Date.now() - releaseDate.getTime()) / (1000 * 60 * 60 * 24));
+        } else if (item.year) {
+          // Fallback: assume January 1st of release year
+          const releaseDate = new Date(item.year, 0, 1);
+          itemValue = Math.floor((Date.now() - releaseDate.getTime()) / (1000 * 60 * 60 * 24));
+        } else {
+          itemValue = Infinity;
+        }
+        break;
       case 'year':
         itemValue = item.year || 0;
         break;
+      case 'duration_minutes':
+        // Duration is in milliseconds in Plex
+        itemValue = item.duration ? Math.round(item.duration / 60000) : 0;
+        break;
+
+      // Media Info conditions
       case 'rating':
         itemValue = item.rating || item.audienceRating || 0;
         break;
@@ -141,11 +160,49 @@ class RulesEngine {
       case 'content_rating':
         itemValue = item.contentRating || '';
         break;
+      case 'studio':
+        itemValue = item.studio || '';
+        break;
+      case 'language':
+        // Try to get original language
+        itemValue = item.originalLanguage || item.language || '';
+        break;
+
+      // TV Show specific
+      case 'season_count':
+        itemValue = item.childCount || 0;
+        break;
+      case 'episode_count':
+        itemValue = item.leafCount || 0;
+        break;
+      case 'is_continuing':
+        // Check if show status indicates it's still airing
+        const status = (context.arrItem?.status || '').toLowerCase();
+        itemValue = status === 'continuing' || status === 'returning series';
+        break;
+
+      // File & Quality conditions
       case 'resolution':
-        itemValue = context.resolution || '';
+        itemValue = context.resolution || item.Media?.[0]?.videoResolution || '';
         break;
       case 'file_size_gb':
         itemValue = (context.fileSize || 0) / (1024 * 1024 * 1024);
+        break;
+      case 'video_codec':
+        itemValue = item.Media?.[0]?.videoCodec || context.arrItem?.movieFile?.mediaInfo?.videoCodec || '';
+        break;
+      case 'audio_codec':
+        itemValue = item.Media?.[0]?.audioCodec || context.arrItem?.movieFile?.mediaInfo?.audioCodec || '';
+        break;
+      case 'is_4k':
+        const res = context.resolution || item.Media?.[0]?.videoResolution || '';
+        itemValue = res === '4k' || res === '2160' || parseInt(res) >= 2160;
+        break;
+      case 'is_hdr':
+        const hdrTypes = ['hdr', 'hdr10', 'hdr10+', 'dolby vision', 'dv', 'hlg'];
+        const videoRange = (item.Media?.[0]?.Part?.[0]?.Stream?.[0]?.displayTitle || '').toLowerCase();
+        const mediaInfo = context.arrItem?.movieFile?.mediaInfo?.videoDynamicRangeType || '';
+        itemValue = hdrTypes.some(h => videoRange.includes(h) || mediaInfo.toLowerCase().includes(h));
         break;
 
       // Sonarr/Radarr conditions
@@ -153,21 +210,23 @@ class RulesEngine {
         itemValue = context.arrItem?.monitored ?? true;
         break;
       case 'quality_profile':
-        itemValue = context.arrItem?.qualityProfileId;
+        itemValue = context.arrItem?.qualityProfileId?.toString() || context.arrItem?.qualityProfile?.name || '';
         break;
       case 'tags':
-        itemValue = context.arrItem?.tags || [];
+        // Get tag names from arr item
+        const tagIds = context.arrItem?.tags || [];
+        itemValue = tagIds.map(id => context.arrTagMap?.[id] || id.toString());
         break;
       case 'root_folder':
         itemValue = context.arrItem?.rootFolderPath || context.arrItem?.path || '';
         break;
 
-      // Overseerr conditions
+      // Request conditions
       case 'has_request':
         itemValue = context.hasRequest || false;
         break;
       case 'requested_by':
-        itemValue = context.requestedBy || null;
+        itemValue = context.requestedBy || '';
         break;
       case 'days_since_requested':
         if (!context.requestDate) {
