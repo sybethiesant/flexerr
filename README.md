@@ -9,12 +9,13 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 - **Multi-Server Support** - Works with Plex (OAuth) and Jellyfin (username/password)
 - **Watchlist Integration** - Sync with Plex watchlists or Jellyfin favorites for automatic requests
 - **Auto-Download** - Watchlist additions trigger Sonarr/Radarr downloads automatically
+- **Auto-Invite** - Automatically invite new users to your Plex server with configured library access
 - **VIPER** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from any cleanup rules
 - **Leaving Soon Collection** - Grace period before deletion with collection visibility
 - **Watchlist Sync & Restoration** - Tracks watchlist removals and re-adds; re-adding triggers automatic restoration and fresh download
 - **Rules Engine** - Flexible cleanup rules based on watch status, age, ratings, and more
-- **Media Repair** - Quality upgrades and Dolby Vision Profile 5 conversion
+- **Auto Convert** - Hardware-accelerated video conversion with NVIDIA NVENC support
 - **Multi-User Support** - Each user has their own watchlist and viewing history
 - **Connected Services Management** - Configure and test services from the Settings page
 
@@ -128,6 +129,44 @@ services:
     # devices:
     #   - /dev/dri:/dev/dri
 ```
+
+### NVIDIA GPU Support (NVENC)
+
+For hardware-accelerated video conversion using NVIDIA GPUs:
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) on your host
+
+2. Run the container with NVIDIA runtime:
+```bash
+docker run -d \
+  --name flexerr \
+  --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+  -p 3100:3100 \
+  -v flexerr-data:/app/data \
+  -v /path/to/media:/Media \
+  flexerr
+```
+
+3. Verify GPU access:
+```bash
+docker exec flexerr nvidia-smi
+docker exec flexerr ffmpeg -encoders 2>/dev/null | grep nvenc
+```
+
+Supported encoders: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`
+
+### Auto-Invite New Users
+
+Automatically invite new users to your Plex server when they sign in to Flexerr:
+
+1. Go to Settings → Media Sync tab
+2. Enable "Auto-Invite New Users"
+3. Select which libraries to share with new users
+4. When a new user authenticates via Plex OAuth, they'll receive an email invitation to your Plex server
+
+This allows you to share a Flexerr link with friends - they sign in with Plex, automatically get invited to your server, and can immediately start adding content to their watchlist.
 
 ## Watchlist Sync & Restoration
 

@@ -5,12 +5,16 @@ import {
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
   ChevronDown, ChevronUp, HardDrive, Zap, Video, Play,
   CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink,
-  Search, X
+  Search, X, Layers, Tv, Shield
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 // Default provider IDs for discover filter (popular US streaming services)
 const DEFAULT_PROVIDER_IDS = [8, 9, 337, 1899, 15, 386, 350, 2303, 283];
+
+// ============================================
+// Reusable Components
+// ============================================
 
 function SettingSection({ title, icon: Icon, children, collapsible = false, defaultOpen = true }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -141,33 +145,22 @@ function SelectInput({ value, onChange, options }) {
   );
 }
 
-// Simple schedule picker - converts to/from cron expressions
 function ScheduleInput({ value, onChange }) {
-  // Parse cron to simple format
   const parseCron = (cron) => {
     if (!cron) return { type: 'daily', hour: 2 };
-
     const parts = cron.split(' ');
     if (parts.length !== 5) return { type: 'daily', hour: 2 };
-
     const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-
-    // Check for "every X hours" pattern: "0 */X * * *"
     if (hour.startsWith('*/')) {
       const hours = parseInt(hour.slice(2));
       return { type: 'hours', interval: hours };
     }
-
-    // Daily at specific hour: "0 X * * *"
     if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*' && !hour.includes('/') && !hour.includes(',')) {
       return { type: 'daily', hour: parseInt(hour) || 0 };
     }
-
-    // Default
     return { type: 'daily', hour: 2 };
   };
 
-  // Convert simple format to cron
   const toCron = (schedule) => {
     switch (schedule.type) {
       case 'hours':
@@ -215,7 +208,6 @@ function ScheduleInput({ value, onChange }) {
         <option value="daily">Daily at</option>
         <option value="hours">Every</option>
       </select>
-
       {schedule.type === 'daily' ? (
         <select
           value={schedule.hour}
@@ -249,7 +241,6 @@ function ScheduleInput({ value, onChange }) {
   );
 }
 
-// Service card component for displaying connected services
 function ServiceCard({ service, onTest, onEdit, onDelete, testing }) {
   const getServiceIcon = (type) => {
     switch (type) {
@@ -347,7 +338,6 @@ function ServiceCard({ service, onTest, onEdit, onDelete, testing }) {
   );
 }
 
-// Service edit modal
 function ServiceModal({ service, onSave, onClose, isNew = false }) {
   const [formData, setFormData] = useState({
     type: service?.type || 'sonarr',
@@ -379,7 +369,6 @@ function ServiceModal({ service, onSave, onClose, isNew = false }) {
 
   const handleSave = () => {
     const data = { ...formData };
-    // Only send api_key if it was changed
     if (!data.api_key) {
       delete data.api_key;
     }
@@ -458,7 +447,6 @@ function ServiceModal({ service, onSave, onClose, isNew = false }) {
               Active
             </label>
           </div>
-
           {testResult && (
             <div className={`p-3 rounded-lg ${testResult.success ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
               <div className="flex items-center gap-2">
@@ -495,10 +483,29 @@ function ServiceModal({ service, onSave, onClose, isNew = false }) {
   );
 }
 
+// ============================================
+// Settings Tabs Configuration
+// ============================================
+
+const SETTINGS_TABS = [
+  { id: 'general', label: 'General', icon: Settings },
+  { id: 'services', label: 'Services', icon: Server },
+  { id: 'viper', label: 'VIPER', icon: Zap },
+  { id: 'media', label: 'Media Sync', icon: Tv },
+  { id: 'cleanup', label: 'Cleanup', icon: Clock },
+  { id: 'convert', label: 'Auto Convert', icon: Video },
+];
+
+// ============================================
+// Main Settings Page
+// ============================================
+
 export default function SettingsPage() {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState('general');
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
+  const [settingsReady, setSettingsReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalSettings, setOriginalSettings] = useState({});
@@ -529,77 +536,17 @@ export default function SettingsPage() {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobsFilter, setJobsFilter] = useState('all');
 
+  // Plex libraries for auto-invite
+  const [plexLibraries, setPlexLibraries] = useState([]);
+  const [loadingLibraries, setLoadingLibraries] = useState(false);
+  const [selectedLibraries, setSelectedLibraries] = useState([]);
+
   useEffect(() => {
     fetchSettings();
     fetchServices();
-    // Auto-detect hardware on load
     detectHardware();
+    fetchPlexLibraries();
   }, []);
-
-  // Fetch all available streaming providers from TMDB
-  const fetchAllProviders = async () => {
-    setLoadingProviders(true);
-    try {
-      // Fetch both movie and TV providers to get the complete list
-      const [movieRes, tvRes] = await Promise.all([
-        api.get('/discover/providers', { params: { type: 'movie', region: 'US' } }),
-        api.get('/discover/providers', { params: { type: 'tv', region: 'US' } })
-      ]);
-
-      // Merge and dedupe providers by ID first
-      const byId = new Map();
-      [...(movieRes.data.providers || []), ...(tvRes.data.providers || [])].forEach(p => {
-        if (!byId.has(p.id)) {
-          byId.set(p.id, p);
-        }
-      });
-
-      // Extract brand name for grouping (e.g., "Amazon Prime Video" -> "amazon")
-      const getBrand = (name) => {
-        const lower = name.toLowerCase().trim();
-        // Common brand patterns to extract
-        const brandPatterns = [
-          /^(amazon)/i, /^(amc)/i, /^(apple)/i, /^(bet)/i, /^(britbox)/i,
-          /^(cbs)/i, /^(comedy)/i, /^(criterion)/i, /^(crunchyroll)/i,
-          /^(curiosity)/i, /^(discovery)/i, /^(disney)/i, /^(doc)/i,
-          /^(epix)/i, /^(espn)/i, /^(fandango)/i, /^(fox)/i, /^(fubi)/i,
-          /^(fxnow)/i, /^(google)/i, /^(hallmark)/i, /^(hbo)/i, /^(history)/i,
-          /^(hulu)/i, /^(itv)/i, /^(kanopy)/i, /^(lifetime)/i, /^(max)/i,
-          /^(mgm)/i, /^(mubi)/i, /^(nbc)/i, /^(netflix)/i, /^(nick)/i,
-          /^(paramount)/i, /^(pbs)/i, /^(peacock)/i, /^(pluto)/i, /^(plex)/i,
-          /^(roku)/i, /^(shudder)/i, /^(showtime)/i, /^(starz)/i, /^(sundance)/i,
-          /^(tnt)/i, /^(tubi)/i, /^(vudu)/i, /^(youtube)/i
-        ];
-        for (const pattern of brandPatterns) {
-          const match = lower.match(pattern);
-          if (match) return match[1].toLowerCase();
-        }
-        // Default: use first word
-        return lower.split(/[\s+]/)[0].replace(/[^a-z0-9]/g, '');
-      };
-
-      // Group by brand and keep the one with best display_priority
-      const byBrand = new Map();
-      Array.from(byId.values()).forEach(p => {
-        const brand = getBrand(p.name);
-        const existing = byBrand.get(brand);
-        if (!existing || (p.display_priority || 999) < (existing.display_priority || 999)) {
-          byBrand.set(brand, p);
-        }
-      });
-
-      // Sort by display_priority (most popular first)
-      const merged = Array.from(byBrand.values()).sort((a, b) =>
-        (a.display_priority || 999) - (b.display_priority || 999)
-      );
-      setAllProviders(merged);
-    } catch (err) {
-      console.error('Failed to load providers:', err);
-      toast.error('Failed to load streaming providers');
-    } finally {
-      setLoadingProviders(false);
-    }
-  };
 
   // Parse enabled providers from settings when settings load
   useEffect(() => {
@@ -615,11 +562,26 @@ export default function SettingsPage() {
     }
   }, [settings.discover_providers]);
 
+  // Parse auto-invite libraries from settings
+  useEffect(() => {
+    if (settings.auto_invite_libraries) {
+      try {
+        const parsed = JSON.parse(settings.auto_invite_libraries);
+        if (Array.isArray(parsed)) {
+          setSelectedLibraries(parsed);
+        }
+      } catch (e) {
+        // Use defaults
+      }
+    }
+  }, [settings.auto_invite_libraries]);
+
   const fetchSettings = async () => {
     try {
       const res = await api.get('/settings');
       setSettings(res.data);
       setOriginalSettings(res.data);
+      setSettingsReady(true);
     } catch (err) {
       console.error('Failed to load settings:', err);
       toast.error('Failed to load settings');
@@ -634,10 +596,36 @@ export default function SettingsPage() {
       setServices(res.data);
     } catch (err) {
       console.error('Failed to load services:', err);
-      // Don't show error toast on 403 - user might not be admin
     } finally {
       setLoadingServices(false);
     }
+  };
+
+  const fetchPlexLibraries = async () => {
+    setLoadingLibraries(true);
+    try {
+      const res = await api.get('/settings/plex-libraries');
+      setPlexLibraries(res.data.libraries || []);
+    } catch (err) {
+      console.error('Failed to load Plex libraries:', err);
+      // Silently fail - Plex might not be configured yet
+    } finally {
+      setLoadingLibraries(false);
+    }
+  };
+
+  const toggleLibrary = (libraryId) => {
+    const newSelected = selectedLibraries.includes(libraryId)
+      ? selectedLibraries.filter(id => id !== libraryId)
+      : [...selectedLibraries, libraryId];
+    setSelectedLibraries(newSelected);
+    updateSetting('auto_invite_libraries', JSON.stringify(newSelected));
+  };
+
+  const selectAllLibraries = () => {
+    const allIds = plexLibraries.map(lib => lib.id);
+    setSelectedLibraries(allIds);
+    updateSetting('auto_invite_libraries', JSON.stringify(allIds));
   };
 
   const updateSetting = (key, value) => {
@@ -665,22 +653,18 @@ export default function SettingsPage() {
     setHasChanges(false);
   };
 
-  // Detect available GPU hardware
   const detectHardware = async () => {
     setDetectingHardware(true);
     try {
       const res = await api.get('/settings/detect-hardware');
       setDetectedHardware(res.data);
-      toast.success('Hardware detection complete');
     } catch (err) {
       console.error('Failed to detect hardware:', err);
-      toast.error('Failed to detect hardware');
     } finally {
       setDetectingHardware(false);
     }
   };
 
-  // Apply recommended hardware settings
   const applyRecommendedHardware = () => {
     if (!detectedHardware?.recommended) return;
     const rec = detectedHardware.recommended;
@@ -690,7 +674,6 @@ export default function SettingsPage() {
     toast.success('Applied recommended settings');
   };
 
-  // Fetch conversion jobs
   const fetchConversionJobs = async () => {
     setLoadingJobs(true);
     try {
@@ -703,7 +686,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Delete a conversion job
   const deleteConversionJob = async (jobId) => {
     try {
       await api.delete(`/conversions/${jobId}`);
@@ -714,7 +696,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Retry a failed conversion job
   const retryConversionJob = async (jobId) => {
     try {
       await api.post(`/conversions/${jobId}/retry`);
@@ -725,7 +706,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Delete all failed conversion jobs
   const deleteAllFailedJobs = async () => {
     const failedJobs = conversionJobs.filter(j => j.status === 'failed');
     if (failedJobs.length === 0) {
@@ -767,7 +747,6 @@ export default function SettingsPage() {
       const res = await api.post('/cleanup/run', { dryRun });
       setCleanupResult(res.data);
 
-      // Handle special cases
       if (res.data.skipped) {
         toast.error('Cleanup skipped - another task is already running');
         return;
@@ -811,7 +790,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Service management handlers
   const handleTestService = async (service) => {
     setTestingService(service.id);
     try {
@@ -856,12 +834,64 @@ export default function SettingsPage() {
     }
   };
 
-  const getBool = (key) => settings[key] === 'true';
-  const getInt = (key, defaultVal = 0) => parseInt(settings[key]) || defaultVal;
-  const getFloat = (key, defaultVal = 0) => parseFloat(settings[key]) || defaultVal;
-  const getStr = (key, defaultVal = '') => settings[key] || defaultVal;
+  // Provider functions
+  const fetchAllProviders = async () => {
+    setLoadingProviders(true);
+    try {
+      const [movieRes, tvRes] = await Promise.all([
+        api.get('/discover/providers', { params: { type: 'movie', region: 'US' } }),
+        api.get('/discover/providers', { params: { type: 'tv', region: 'US' } })
+      ]);
 
-  // Toggle a provider in the enabled list
+      const byId = new Map();
+      [...(movieRes.data.providers || []), ...(tvRes.data.providers || [])].forEach(p => {
+        if (!byId.has(p.id)) {
+          byId.set(p.id, p);
+        }
+      });
+
+      const getBrand = (name) => {
+        const lower = name.toLowerCase().trim();
+        const brandPatterns = [
+          /^(amazon)/i, /^(amc)/i, /^(apple)/i, /^(bet)/i, /^(britbox)/i,
+          /^(cbs)/i, /^(comedy)/i, /^(criterion)/i, /^(crunchyroll)/i,
+          /^(curiosity)/i, /^(discovery)/i, /^(disney)/i, /^(doc)/i,
+          /^(epix)/i, /^(espn)/i, /^(fandango)/i, /^(fox)/i, /^(fubi)/i,
+          /^(fxnow)/i, /^(google)/i, /^(hallmark)/i, /^(hbo)/i, /^(history)/i,
+          /^(hulu)/i, /^(itv)/i, /^(kanopy)/i, /^(lifetime)/i, /^(max)/i,
+          /^(mgm)/i, /^(mubi)/i, /^(nbc)/i, /^(netflix)/i, /^(nick)/i,
+          /^(paramount)/i, /^(pbs)/i, /^(peacock)/i, /^(pluto)/i, /^(plex)/i,
+          /^(roku)/i, /^(shudder)/i, /^(showtime)/i, /^(starz)/i, /^(sundance)/i,
+          /^(tnt)/i, /^(tubi)/i, /^(vudu)/i, /^(youtube)/i
+        ];
+        for (const pattern of brandPatterns) {
+          const match = lower.match(pattern);
+          if (match) return match[1].toLowerCase();
+        }
+        return lower.split(/[\s+]/)[0].replace(/[^a-z0-9]/g, '');
+      };
+
+      const byBrand = new Map();
+      Array.from(byId.values()).forEach(p => {
+        const brand = getBrand(p.name);
+        const existing = byBrand.get(brand);
+        if (!existing || (p.display_priority || 999) < (existing.display_priority || 999)) {
+          byBrand.set(brand, p);
+        }
+      });
+
+      const merged = Array.from(byBrand.values()).sort((a, b) =>
+        (a.display_priority || 999) - (b.display_priority || 999)
+      );
+      setAllProviders(merged);
+    } catch (err) {
+      console.error('Failed to load providers:', err);
+      toast.error('Failed to load streaming providers');
+    } finally {
+      setLoadingProviders(false);
+    }
+  };
+
   const toggleProvider = (providerId) => {
     const newEnabled = enabledProviders.includes(providerId)
       ? enabledProviders.filter(id => id !== providerId)
@@ -870,7 +900,6 @@ export default function SettingsPage() {
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
-  // Select all visible providers
   const selectAllProviders = () => {
     const filtered = getFilteredProviders();
     const newEnabled = [...new Set([...enabledProviders, ...filtered.map(p => p.id)])];
@@ -878,7 +907,6 @@ export default function SettingsPage() {
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
-  // Deselect all visible providers
   const deselectAllProviders = () => {
     const filtered = getFilteredProviders();
     const filterIds = new Set(filtered.map(p => p.id));
@@ -887,22 +915,29 @@ export default function SettingsPage() {
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
-  // Get filtered providers based on search
   const getFilteredProviders = () => {
-    if (!providerSearch.trim()) return allProviders;
-    const search = providerSearch.toLowerCase();
-    return allProviders.filter(p => p.name.toLowerCase().includes(search));
+    let filtered = allProviders;
+    if (providerSearch.trim()) {
+      const search = providerSearch.toLowerCase();
+      filtered = allProviders.filter(p => p.name.toLowerCase().includes(search));
+    }
+    // Sort alphabetically by name
+    return [...filtered].sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  // Get media server type
+  const getBool = (key) => settings[key] === 'true';
+  const getInt = (key, defaultVal = 0) => parseInt(settings[key]) || defaultVal;
+  const getFloat = (key, defaultVal = 0) => parseFloat(settings[key]) || defaultVal;
+  const getStr = (key, defaultVal = '') => settings[key] || defaultVal;
+
   const mediaServerType = getStr('media_server_type', 'plex');
   const mediaServerLabel = mediaServerType === 'jellyfin' ? 'Jellyfin' : 'Plex';
 
-  // Group services by type
   const mediaServer = services.find(s => s.type === 'plex' || s.type === 'jellyfin');
   const arrServices = services.filter(s => s.type === 'sonarr' || s.type === 'radarr');
 
-  if (loading) {
+  // Wait for settings to be fully loaded and ready
+  if (loading || !settingsReady) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="h-12 w-12 text-primary-500 animate-spin" />
@@ -943,97 +978,13 @@ export default function SettingsPage() {
     );
   }
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-24">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Settings className="h-6 w-6 text-primary-400" />
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-        </div>
-        {hasChanges && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={resetSettings}
-              className="btn btn-secondary flex items-center gap-2"
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset
-            </button>
-            <button
-              onClick={saveSettings}
-              disabled={saving}
-              className="btn btn-primary flex items-center gap-2"
-            >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save Changes
-            </button>
-          </div>
-        )}
-      </div>
+  // ============================================
+  // Tab Content Renderers
+  // ============================================
 
-      {/* Connected Services */}
-      <SettingSection title="Connected Services" icon={Server}>
-        {loadingServices ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 text-primary-500 animate-spin" />
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Media Server */}
-            <div>
-              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Media Server</div>
-              {mediaServer ? (
-                <ServiceCard
-                  service={mediaServer}
-                  onTest={handleTestService}
-                  onEdit={setEditingService}
-                  onDelete={handleDeleteService}
-                  testing={testingService}
-                />
-              ) : (
-                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
-                  <p className="text-sm text-slate-400">No media server configured</p>
-                </div>
-              )}
-            </div>
-
-            {/* Arr Services */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Download Managers</div>
-                <button
-                  onClick={() => setAddingService(true)}
-                  className="flex items-center gap-1 text-sm text-primary-400 hover:text-primary-300"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Service
-                </button>
-              </div>
-              {arrServices.length > 0 ? (
-                <div className="space-y-2">
-                  {arrServices.map((service) => (
-                    <ServiceCard
-                      key={service.id}
-                      service={service}
-                      onTest={handleTestService}
-                      onEdit={setEditingService}
-                      onDelete={handleDeleteService}
-                      testing={testingService}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
-                  <p className="text-sm text-slate-400">No Sonarr or Radarr services configured</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </SettingSection>
-
-      {/* General Settings */}
-      <SettingSection title="General" icon={Settings}>
+  const renderGeneralTab = () => (
+    <div className="space-y-6">
+      <SettingSection title="General Settings" icon={Settings}>
         <SettingRow label="Timezone" description="Timezone for scheduled tasks">
           <SelectInput
             value={getStr('timezone', 'UTC')}
@@ -1080,11 +1031,9 @@ export default function SettingsPage() {
         <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
           <p className="text-blue-300 text-sm">
             Select which streaming providers appear in the Discover page filter.
-            Users can filter content by one provider at a time.
           </p>
         </div>
 
-        {/* Load providers button or search/controls */}
         {allProviders.length === 0 ? (
           <div className="text-center py-8">
             <button
@@ -1097,15 +1046,11 @@ export default function SettingsPage() {
               ) : (
                 <Search className="h-4 w-4" />
               )}
-              {loadingProviders ? 'Loading Providers...' : 'Load All Available Providers'}
+              {loadingProviders ? 'Loading...' : 'Load Providers'}
             </button>
-            <p className="text-sm text-slate-400 mt-3">
-              Click to fetch all streaming providers from TMDB
-            </p>
           </div>
         ) : (
           <>
-            {/* Search and controls */}
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -1114,7 +1059,7 @@ export default function SettingsPage() {
                   value={providerSearch}
                   onChange={(e) => setProviderSearch(e.target.value)}
                   placeholder="Search providers..."
-                  className="w-full pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  className="w-full pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm"
                 />
                 {providerSearch && (
                   <button
@@ -1126,120 +1071,131 @@ export default function SettingsPage() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={selectAllProviders}
-                  className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                >
+                <button onClick={selectAllProviders} className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg">
                   Select All
                 </button>
-                <button
-                  onClick={deselectAllProviders}
-                  className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                >
+                <button onClick={deselectAllProviders} className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded-lg">
                   Deselect All
-                </button>
-                <button
-                  onClick={fetchAllProviders}
-                  disabled={loadingProviders}
-                  className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                  title="Refresh providers"
-                >
-                  <RefreshCw className={`h-4 w-4 ${loadingProviders ? 'animate-spin' : ''}`} />
                 </button>
               </div>
             </div>
 
-            {/* Stats bar */}
             <div className="flex items-center justify-between mb-4 px-1">
               <span className="text-sm text-slate-400">
-                {getFilteredProviders().length} provider{getFilteredProviders().length !== 1 ? 's' : ''}
-                {providerSearch && ` matching "${providerSearch}"`}
+                {getFilteredProviders().length} providers
               </span>
               <span className="text-sm font-medium text-primary-400">
                 {enabledProviders.length} enabled
               </span>
             </div>
 
-            {/* Provider grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-96 overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-72 overflow-y-auto pr-1">
               {getFilteredProviders().map(provider => {
                 const isEnabled = enabledProviders.includes(provider.id);
                 return (
                   <button
                     key={provider.id}
                     onClick={() => toggleProvider(provider.id)}
-                    className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left ${
+                    className={`flex items-center gap-3 p-3 rounded-xl transition-all text-left ${
                       isEnabled
-                        ? 'bg-gradient-to-br from-primary-500/20 to-blue-500/20 ring-2 ring-primary-400/50 shadow-lg shadow-primary-500/10'
+                        ? 'bg-gradient-to-br from-primary-500/20 to-blue-500/20 ring-2 ring-primary-400/50'
                         : 'bg-slate-700/40 hover:bg-slate-600/50 border border-slate-600/50'
                     }`}
                   >
-                    <div className={`w-10 h-10 rounded-lg overflow-hidden bg-white flex-shrink-0 flex items-center justify-center shadow-md ${
-                      isEnabled ? 'ring-2 ring-white/30' : ''
-                    }`}>
+                    <div className="w-10 h-10 rounded-lg overflow-hidden bg-white flex-shrink-0 flex items-center justify-center shadow-md">
                       {provider.logo_path ? (
-                        <img
-                          src={provider.logo_path}
-                          alt={provider.name}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
+                        <img src={provider.logo_path} alt={provider.name} className="w-full h-full object-cover" loading="lazy" />
                       ) : (
-                        <span className="text-xs text-slate-500 font-bold">
-                          {provider.name.slice(0, 2).toUpperCase()}
-                        </span>
+                        <span className="text-xs text-slate-500 font-bold">{provider.name.slice(0, 2).toUpperCase()}</span>
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <span className={`text-sm font-medium truncate block ${
-                        isEnabled ? 'text-white' : 'text-slate-300'
-                      }`}>
+                      <span className={`text-sm font-medium truncate block ${isEnabled ? 'text-white' : 'text-slate-300'}`}>
                         {provider.name}
                       </span>
-                      {isEnabled && (
-                        <span className="text-xs text-primary-400">Enabled</span>
-                      )}
                     </div>
-                    <div className={`w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center ${
-                      isEnabled ? 'bg-primary-500' : 'bg-slate-600'
-                    }`}>
-                      {isEnabled && (
-                        <CheckCircle className="w-3 h-3 text-white" />
-                      )}
+                    <div className={`w-5 h-5 rounded-full flex-shrink-0 flex items-center justify-center ${isEnabled ? 'bg-primary-500' : 'bg-slate-600'}`}>
+                      {isEnabled && <CheckCircle className="w-3 h-3 text-white" />}
                     </div>
                   </button>
                 );
               })}
             </div>
-
-            {getFilteredProviders().length === 0 && providerSearch && (
-              <div className="text-center py-8 text-slate-400">
-                <p>No providers match "{providerSearch}"</p>
-                <button
-                  onClick={() => setProviderSearch('')}
-                  className="text-primary-400 hover:text-primary-300 text-sm mt-2"
-                >
-                  Clear search
-                </button>
-              </div>
-            )}
           </>
         )}
+      </SettingSection>
+    </div>
+  );
 
-        {enabledProviders.length === 0 && allProviders.length > 0 && (
-          <p className="text-sm text-amber-400 mt-3">
-            Warning: No providers selected. The provider filter will be hidden on the Discover page.
-          </p>
+  const renderServicesTab = () => (
+    <div className="space-y-6">
+      <SettingSection title="Connected Services" icon={Server}>
+        {loadingServices ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-6 w-6 text-primary-500 animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Media Server</div>
+              {mediaServer ? (
+                <ServiceCard
+                  service={mediaServer}
+                  onTest={handleTestService}
+                  onEdit={setEditingService}
+                  onDelete={handleDeleteService}
+                  testing={testingService}
+                />
+              ) : (
+                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
+                  <p className="text-sm text-slate-400">No media server configured</p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Download Managers</div>
+                <button
+                  onClick={() => setAddingService(true)}
+                  className="flex items-center gap-1 text-sm text-primary-400 hover:text-primary-300"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Service
+                </button>
+              </div>
+              {arrServices.length > 0 ? (
+                <div className="space-y-2">
+                  {arrServices.map((service) => (
+                    <ServiceCard
+                      key={service.id}
+                      service={service}
+                      onTest={handleTestService}
+                      onEdit={setEditingService}
+                      onDelete={handleDeleteService}
+                      testing={testingService}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-700/30 border border-slate-600 border-dashed rounded-lg p-4 text-center">
+                  <p className="text-sm text-slate-400">No Sonarr or Radarr services configured</p>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </SettingSection>
+    </div>
+  );
 
-      {/* VIPER - Velocity-Informed Protection & Episode Removal */}
+  const renderViperTab = () => (
+    <div className="space-y-6">
       <SettingSection title="VIPER" icon={Zap}>
         <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
           <p className="text-blue-300 text-sm">
             <strong>VIPER</strong> (Velocity-Informed Protection & Episode Removal) intelligently manages TV show episodes based on each user's
-            watch progress and velocity. Episodes are deleted only after all active users have watched them,
-            and can be automatically re-downloaded when users approach them.
+            watch progress and velocity. Episodes are deleted only after all active users have watched them.
           </p>
         </div>
 
@@ -1264,7 +1220,6 @@ export default function SettingsPage() {
               onClick={() => runSmartCleanup(false)}
               disabled={runningCleanup || getBool('dry_run')}
               className="btn btn-primary flex items-center gap-2 text-sm"
-              title={getBool('dry_run') ? 'Disable Dry Run mode in General settings to run live cleanup' : 'Run cleanup now'}
             >
               {runningCleanup ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Run Now
@@ -1280,12 +1235,6 @@ export default function SettingsPage() {
               <div>Movies analyzed: {cleanupResult.movies?.moviesAnalyzed || 0}</div>
               <div>Episode candidates: {cleanupResult.episodes?.deletionCandidates?.length || 0}</div>
               <div>Movie candidates: {cleanupResult.movies?.deletionCandidates?.length || 0}</div>
-              {!getBool('dry_run') && (
-                <>
-                  <div>Episodes deleted: {cleanupResult.episodes?.deleted?.length || 0}</div>
-                  <div>Movies deleted: {cleanupResult.movies?.deleted?.length || 0}</div>
-                </>
-              )}
             </div>
           </div>
         )}
@@ -1312,37 +1261,6 @@ export default function SettingsPage() {
                 <div>* {protectionStats.protectionReasons?.graceperiod}</div>
               </div>
             </div>
-
-            {protectionStats.velocities?.length > 0 && (
-              <div>
-                <div className="font-medium text-white mb-2">Active Viewers (Velocity Data):</div>
-                <div className="space-y-1">
-                  {protectionStats.velocities.map((v, i) => (
-                    <div key={i} className="flex justify-between text-xs bg-slate-600/50 rounded px-2 py-1">
-                      <span className="text-slate-300">{v.username}</span>
-                      <span className="text-primary-400">{v.position} @ {v.epsPerDay} eps/day</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {protectionStats.watchlistWithinGrace?.length > 0 && (
-              <div>
-                <div className="font-medium text-white mb-2">Watchlist Grace Period (Protected):</div>
-                <div className="space-y-1">
-                  {protectionStats.watchlistWithinGrace.slice(0, 10).map((w, i) => (
-                    <div key={i} className="flex justify-between text-xs bg-yellow-500/20 rounded px-2 py-1">
-                      <span className="text-slate-300">{w.title}</span>
-                      <span className="text-yellow-400">{w.username} - {w.daysAgo}d ago</span>
-                    </div>
-                  ))}
-                  {protectionStats.watchlistWithinGrace.length > 10 && (
-                    <div className="text-xs text-slate-500">...and {protectionStats.watchlistWithinGrace.length - 10} more</div>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1352,9 +1270,10 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('velocity_cleanup_schedule', v)}
           />
         </SettingRow>
+      </SettingSection>
 
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Deletion Timing</div>
-
+      {/* Deletion Timing */}
+      <SettingSection title="Deletion Timing" icon={Clock} collapsible defaultOpen={false}>
         <SettingRow label="Min Days Since Watch" description="Minimum days after watching before cleanup">
           <NumberInput
             value={getInt('smart_min_days_since_watch', 15)}
@@ -1388,9 +1307,6 @@ export default function SettingsPage() {
             onChange={(v) => updateSetting('smart_require_all_users_watched', v)}
           />
         </SettingRow>
-
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Watchlist Protection</div>
-
         <SettingRow label="Watchlist Grace Period" description="Days to protect shows added to watchlist">
           <NumberInput
             value={getInt('smart_watchlist_grace_days', 14)}
@@ -1400,11 +1316,13 @@ export default function SettingsPage() {
             unit="days"
           />
         </SettingRow>
+      </SettingSection>
 
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Velocity-Based Trimming</div>
+      {/* Velocity-Based Trimming */}
+      <SettingSection title="Velocity-Based Trimming" icon={Zap} collapsible defaultOpen={false}>
         <p className="text-xs text-slate-400 pb-2">Delete episodes too far ahead of users based on their watch velocity.</p>
 
-        <SettingRow label="Enable Velocity-Based Trimming" description="Delete unwatched episodes too far ahead based on watch velocity">
+        <SettingRow label="Enable Velocity-Based Trimming" description="Delete unwatched episodes too far ahead">
           <Toggle
             checked={getBool('smart_trim_ahead_enabled')}
             onChange={(v) => updateSetting('smart_trim_ahead_enabled', v)}
@@ -1419,7 +1337,7 @@ export default function SettingsPage() {
             unit="days"
           />
         </SettingRow>
-        <SettingRow label="Max Episodes Ahead (Hard Cap)" description="Absolute maximum episodes to keep regardless of velocity">
+        <SettingRow label="Max Episodes Ahead (Hard Cap)" description="Absolute maximum episodes to keep">
           <NumberInput
             value={getInt('smart_max_episodes_ahead', 20)}
             onChange={(v) => updateSetting('smart_max_episodes_ahead', v)}
@@ -1428,11 +1346,7 @@ export default function SettingsPage() {
             unit="episodes"
           />
         </SettingRow>
-
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Unknown Velocity Handling</div>
-        <p className="text-xs text-slate-400 pb-2">When velocity data is insufficient, these fallbacks apply.</p>
-
-        <SettingRow label="Min Velocity Samples" description="Episodes watched before trusting velocity calculation">
+        <SettingRow label="Min Velocity Samples" description="Episodes watched before trusting velocity">
           <NumberInput
             value={getInt('smart_min_velocity_samples', 3)}
             onChange={(v) => updateSetting('smart_min_velocity_samples', v)}
@@ -1460,11 +1374,13 @@ export default function SettingsPage() {
             unit="eps/day"
           />
         </SettingRow>
+      </SettingSection>
 
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Proactive Redownload</div>
+      {/* Proactive Redownload */}
+      <SettingSection title="Proactive Redownload" icon={RefreshCw} collapsible defaultOpen={false}>
         <p className="text-xs text-slate-400 pb-2">Automatically re-download deleted episodes before users need them.</p>
 
-        <SettingRow label="Enable Proactive Redownload" description="Re-download episodes before users catch up to them">
+        <SettingRow label="Enable Proactive Redownload" description="Re-download episodes before users catch up">
           <Toggle
             checked={getBool('smart_proactive_redownload')}
             onChange={(v) => updateSetting('smart_proactive_redownload', v)}
@@ -1497,11 +1413,13 @@ export default function SettingsPage() {
             unit="min"
           />
         </SettingRow>
+      </SettingSection>
 
-        <div className="pt-4 pb-1 text-xs font-semibold text-slate-500 uppercase tracking-wide">Velocity Monitoring</div>
+      {/* Velocity Monitoring */}
+      <SettingSection title="Velocity Monitoring" icon={Eye} collapsible defaultOpen={false}>
         <p className="text-xs text-slate-400 pb-2">Monitor users' watch speed changes and react proactively.</p>
 
-        <SettingRow label="Enable Velocity Monitoring" description="Detect when users speed up or slow down watching">
+        <SettingRow label="Enable Velocity Monitoring" description="Detect when users speed up or slow down">
           <Toggle
             checked={getBool('smart_velocity_monitoring_enabled')}
             onChange={(v) => updateSetting('smart_velocity_monitoring_enabled', v)}
@@ -1537,67 +1455,12 @@ export default function SettingsPage() {
           />
         </SettingRow>
       </SettingSection>
+    </div>
+  );
 
-      {/* Scheduler Settings */}
-      <SettingSection title="Rules Scheduler" icon={Calendar} collapsible>
-        <SettingRow label="Rules Schedule" description="When to run automatic cleanup rules">
-          <ScheduleInput
-            value={getStr('schedule', '0 2 * * *')}
-            onChange={(v) => updateSetting('schedule', v)}
-          />
-        </SettingRow>
-        <SettingRow label="Max Deletions Per Run" description="Maximum items to delete in a single cleanup run">
-          <NumberInput
-            value={getInt('max_deletions_per_run', 50)}
-            onChange={(v) => updateSetting('max_deletions_per_run', v)}
-            min={1}
-            max={500}
-            unit="items"
-          />
-        </SettingRow>
-        <SettingRow label="Log Retention" description="How long to keep activity logs">
-          <NumberInput
-            value={getInt('log_retention_days', 30)}
-            onChange={(v) => updateSetting('log_retention_days', v)}
-            min={1}
-            max={365}
-            unit="days"
-          />
-        </SettingRow>
-      </SettingSection>
-
-      {/* Cleanup Settings */}
-      <SettingSection title="Leaving Soon Collection" icon={Clock} collapsible>
-        <SettingRow label="Default Buffer Days" description="Grace period before items are deleted">
-          <NumberInput
-            value={getInt('buffer_days', 15)}
-            onChange={(v) => updateSetting('buffer_days', v)}
-            min={1}
-            max={90}
-            unit="days"
-          />
-        </SettingRow>
-        <SettingRow label="Collection Name" description={`Name of the ${mediaServerLabel} collection for leaving soon items`}>
-          <div className="w-48">
-            <TextInput
-              value={getStr('collection_name', 'Leaving Soon')}
-              onChange={(v) => updateSetting('collection_name', v)}
-            />
-          </div>
-        </SettingRow>
-        <SettingRow label="Collection Description" description={`Description shown in ${mediaServerLabel} for the collection`}>
-          <div className="w-64">
-            <TextInput
-              value={getStr('collection_description')}
-              onChange={(v) => updateSetting('collection_description', v)}
-              placeholder="Content scheduled for removal..."
-            />
-          </div>
-        </SettingRow>
-      </SettingSection>
-
-      {/* Media Server Sync Settings */}
-      <SettingSection title={`${mediaServerLabel} Sync`} icon={RefreshCw} collapsible>
+  const renderMediaTab = () => (
+    <div className="space-y-6">
+      <SettingSection title={`${mediaServerLabel} Sync`} icon={RefreshCw}>
         <SettingRow label={`Enable ${mediaServerLabel} Sync`} description={`Sync watch history and library from ${mediaServerLabel}`}>
           <Toggle
             checked={settings['plex_sync_enabled'] !== 'false'}
@@ -1627,8 +1490,7 @@ export default function SettingsPage() {
         </SettingRow>
       </SettingSection>
 
-      {/* Watchlist Settings */}
-      <SettingSection title="Watchlist Restoration" icon={Film} collapsible>
+      <SettingSection title="Watchlist Restoration" icon={Film}>
         <SettingRow label="Enable Restoration" description="Auto-restore deleted media when re-added to watchlist">
           <Toggle
             checked={getBool('watchlist_restoration_enabled')}
@@ -1646,19 +1508,85 @@ export default function SettingsPage() {
         </SettingRow>
       </SettingSection>
 
+      {/* Auto-Invite Settings - Only show for Plex */}
+      {mediaServerLabel === 'Plex' && (
+        <SettingSection title="Auto-Invite New Users" icon={Plus}>
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
+            <p className="text-blue-300 text-sm">
+              When enabled, new users who log in via Plex OAuth will automatically receive an invitation
+              to your Plex server with access to the selected libraries. They'll receive an email from Plex to accept the invite.
+            </p>
+          </div>
+
+          <SettingRow label="Enable Auto-Invite" description="Automatically invite new users to your Plex server">
+            <Toggle
+              checked={getBool('auto_invite_enabled')}
+              onChange={(v) => updateSetting('auto_invite_enabled', v)}
+            />
+          </SettingRow>
+
+          {getBool('auto_invite_enabled') && (
+            <div className="pt-4 border-t border-slate-700">
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-white">Libraries to Share</label>
+                {plexLibraries.length > 0 && (
+                  <button
+                    onClick={selectAllLibraries}
+                    className="text-xs text-primary-400 hover:text-primary-300"
+                  >
+                    Select All
+                  </button>
+                )}
+              </div>
+
+              {loadingLibraries ? (
+                <div className="flex items-center gap-2 text-slate-400 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading libraries...
+                </div>
+              ) : plexLibraries.length === 0 ? (
+                <p className="text-sm text-slate-400">
+                  No libraries found. Make sure Plex is configured in the Services tab.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {plexLibraries.map(lib => (
+                    <label
+                      key={lib.id}
+                      className="flex items-center gap-2 p-2 bg-slate-700/50 rounded-lg cursor-pointer hover:bg-slate-700"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedLibraries.includes(lib.id)}
+                        onChange={() => toggleLibrary(lib.id)}
+                        className="rounded border-slate-600 bg-slate-700 text-primary-500 focus:ring-primary-500"
+                      />
+                      <span className="text-sm text-white">{lib.title}</span>
+                      <span className="text-xs text-slate-400">({lib.type})</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {selectedLibraries.length === 0 && getBool('auto_invite_enabled') && plexLibraries.length > 0 && (
+                <p className="text-xs text-yellow-400 mt-2">
+                  ⚠️ No libraries selected. New users won't have access to any content.
+                </p>
+              )}
+            </div>
+          )}
+        </SettingSection>
+      )}
+
       {/* Jellyfin Settings */}
       <SettingSection title="Jellyfin Configuration" icon={Video} collapsible defaultOpen={false}>
         <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 mb-4">
           <p className="text-purple-300 text-sm">
-            <strong>Jellyfin Settings</strong> configure how Flexerr tracks watch progress and
-            calculates viewing velocity for your Jellyfin media server.
+            Configure how Flexerr tracks watch progress for Jellyfin.
           </p>
         </div>
 
-        <SettingRow
-          label="Completion Percentage"
-          description="Percentage watched before an episode is considered complete"
-        >
+        <SettingRow label="Completion Percentage" description="Percentage watched before an episode is considered complete">
           <NumberInput
             value={getInt('jellyfin_completion_percentage', 90)}
             onChange={(v) => updateSetting('jellyfin_completion_percentage', v)}
@@ -1668,10 +1596,7 @@ export default function SettingsPage() {
           />
         </SettingRow>
 
-        <SettingRow
-          label="Velocity Window"
-          description="Number of days to look back when calculating watch velocity"
-        >
+        <SettingRow label="Velocity Window" description="Days to look back when calculating watch velocity">
           <NumberInput
             value={getInt('jellyfin_velocity_window_days', 30)}
             onChange={(v) => updateSetting('jellyfin_velocity_window_days', v)}
@@ -1681,11 +1606,74 @@ export default function SettingsPage() {
           />
         </SettingRow>
       </SettingSection>
+    </div>
+  );
 
-      {/* Auto Convert Settings */}
-      <SettingSection title="Auto Convert" icon={Video} collapsible defaultOpen={false}>
+  const renderCleanupTab = () => (
+    <div className="space-y-6">
+      <SettingSection title="Rules Scheduler" icon={Calendar}>
+        <SettingRow label="Rules Schedule" description="When to run automatic cleanup rules">
+          <ScheduleInput
+            value={getStr('schedule', '0 2 * * *')}
+            onChange={(v) => updateSetting('schedule', v)}
+          />
+        </SettingRow>
+        <SettingRow label="Max Deletions Per Run" description="Maximum items to delete in a single cleanup run">
+          <NumberInput
+            value={getInt('max_deletions_per_run', 50)}
+            onChange={(v) => updateSetting('max_deletions_per_run', v)}
+            min={1}
+            max={500}
+            unit="items"
+          />
+        </SettingRow>
+        <SettingRow label="Log Retention" description="How long to keep activity logs">
+          <NumberInput
+            value={getInt('log_retention_days', 30)}
+            onChange={(v) => updateSetting('log_retention_days', v)}
+            min={1}
+            max={365}
+            unit="days"
+          />
+        </SettingRow>
+      </SettingSection>
+
+      <SettingSection title="Leaving Soon Collection" icon={Clock}>
+        <SettingRow label="Default Buffer Days" description="Grace period before items are deleted">
+          <NumberInput
+            value={getInt('buffer_days', 15)}
+            onChange={(v) => updateSetting('buffer_days', v)}
+            min={1}
+            max={90}
+            unit="days"
+          />
+        </SettingRow>
+        <SettingRow label="Collection Name" description={`Name of the ${mediaServerLabel} collection`}>
+          <div className="w-48">
+            <TextInput
+              value={getStr('collection_name', 'Leaving Soon')}
+              onChange={(v) => updateSetting('collection_name', v)}
+            />
+          </div>
+        </SettingRow>
+        <SettingRow label="Collection Description" description={`Description shown in ${mediaServerLabel}`}>
+          <div className="w-64">
+            <TextInput
+              value={getStr('collection_description')}
+              onChange={(v) => updateSetting('collection_description', v)}
+              placeholder="Content scheduled for removal..."
+            />
+          </div>
+        </SettingRow>
+      </SettingSection>
+    </div>
+  );
+
+  const renderConvertTab = () => (
+    <div className="space-y-6">
+      <SettingSection title="Auto Convert" icon={Video}>
         {/* Hardware Detection */}
-        <SettingRow label="Detect Hardware" description="Scan for available GPU hardware (NVIDIA, AMD, Intel)">
+        <SettingRow label="Detect Hardware" description="Scan for available GPU hardware">
           <div className="flex items-center gap-2">
             <button
               onClick={detectHardware}
@@ -1707,7 +1695,6 @@ export default function SettingsPage() {
           </div>
         </SettingRow>
 
-        {/* Show detected hardware */}
         {detectedHardware && (
           <div className="bg-slate-700/50 rounded-lg p-3 text-sm mb-2">
             <div className="font-medium text-white mb-2">Detected Hardware:</div>
@@ -1727,26 +1714,20 @@ export default function SettingsPage() {
               {!detectedHardware.nvidia?.available && !detectedHardware.vaapi?.available && (
                 <div className="flex items-center gap-2">
                   <XCircle className="h-4 w-4 text-yellow-400" />
-                  <span>No GPU hardware detected - CPU encoding only</span>
-                </div>
-              )}
-              {detectedHardware.recommended && (
-                <div className="mt-2 text-xs text-slate-400">
-                  Recommended: {detectedHardware.recommended.hwaccel.toUpperCase()}
-                  {detectedHardware.recommended.device && ` (${detectedHardware.recommended.device})`}
+                  <span>No GPU detected - CPU encoding only</span>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        <SettingRow label="Enable Auto Convert" description="Automatically convert incompatible video formats on import">
+        <SettingRow label="Enable Auto Convert" description="Automatically convert incompatible video formats">
           <Toggle
             checked={getBool('auto_convert_enabled')}
             onChange={(v) => updateSetting('auto_convert_enabled', v)}
           />
         </SettingRow>
-        <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 (incompatible) to HDR10">
+        <SettingRow label="Convert DV Profile 5" description="Convert Dolby Vision Profile 5 to HDR10">
           <Toggle
             checked={getBool('auto_convert_dv5')}
             onChange={(v) => updateSetting('auto_convert_dv5', v)}
@@ -1804,9 +1785,7 @@ export default function SettingsPage() {
               }
             />
           ) : (
-            <div className="w-48 text-sm text-slate-400">
-              N/A (CPU encoding)
-            </div>
+            <div className="w-48 text-sm text-slate-400">N/A (CPU encoding)</div>
           )}
         </SettingRow>
         <SettingRow label="Output Codec" description="Video codec for converted files">
@@ -1816,7 +1795,7 @@ export default function SettingsPage() {
             options={[
               { value: 'hevc', label: 'HEVC (H.265)' },
               { value: 'h264', label: 'H.264' },
-              ...(getStr('auto_convert_hwaccel', 'none') === 'none' ? [{ value: 'av1', label: 'AV1 (slow, CPU only)' }] : [])
+              ...(getStr('auto_convert_hwaccel', 'none') === 'none' ? [{ value: 'av1', label: 'AV1 (slow)' }] : [])
             ]}
           />
         </SettingRow>
@@ -1834,7 +1813,7 @@ export default function SettingsPage() {
             ]}
           />
         </SettingRow>
-        <SettingRow label="Keep Original" description="Keep original file after successful conversion">
+        <SettingRow label="Keep Original" description="Keep original file after conversion">
           <Toggle
             checked={getBool('auto_convert_keep_original')}
             onChange={(v) => updateSetting('auto_convert_keep_original', v)}
@@ -1845,20 +1824,18 @@ export default function SettingsPage() {
             <TextInput
               value={getStr('auto_convert_original_suffix', '.original')}
               onChange={(v) => updateSetting('auto_convert_original_suffix', v)}
-              placeholder=".original"
             />
           </div>
         </SettingRow>
-        <SettingRow label="Temp Directory" description="Temporary directory for conversion work">
+        <SettingRow label="Temp Directory" description="Temporary directory for conversion">
           <div className="w-64">
             <TextInput
               value={getStr('auto_convert_temp_path', '/tmp/flexerr-convert')}
               onChange={(v) => updateSetting('auto_convert_temp_path', v)}
-              placeholder="/tmp/flexerr-convert"
             />
           </div>
         </SettingRow>
-        <SettingRow label="Max Concurrent Jobs" description="Maximum simultaneous conversion jobs">
+        <SettingRow label="Max Concurrent Jobs" description="Maximum simultaneous conversions">
           <NumberInput
             value={getInt('auto_convert_max_jobs', 1)}
             onChange={(v) => updateSetting('auto_convert_max_jobs', v)}
@@ -1867,117 +1844,169 @@ export default function SettingsPage() {
             unit="jobs"
           />
         </SettingRow>
+      </SettingSection>
 
-        {/* Conversion Jobs Management */}
-        <div className="border-t border-slate-700 pt-4 mt-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-medium text-white">Conversion Jobs</div>
-            <div className="flex items-center gap-2">
-              <SelectInput
-                value={jobsFilter}
-                onChange={setJobsFilter}
-                options={[
-                  { value: 'all', label: 'All Jobs' },
-                  { value: 'failed', label: 'Failed' },
-                  { value: 'pending', label: 'Pending' },
-                  { value: 'processing', label: 'Processing' },
-                  { value: 'completed', label: 'Completed' }
-                ]}
-              />
+      {/* Conversion Jobs */}
+      <SettingSection title="Conversion Jobs" icon={HardDrive}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <SelectInput
+              value={jobsFilter}
+              onChange={setJobsFilter}
+              options={[
+                { value: 'all', label: 'All Jobs' },
+                { value: 'failed', label: 'Failed' },
+                { value: 'pending', label: 'Pending' },
+                { value: 'processing', label: 'Processing' },
+                { value: 'completed', label: 'Completed' }
+              ]}
+            />
+            <button
+              onClick={fetchConversionJobs}
+              disabled={loadingJobs}
+              className="btn btn-secondary flex items-center gap-2 text-sm"
+            >
+              {loadingJobs ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Refresh
+            </button>
+            {conversionJobs.filter(j => j.status === 'failed').length > 0 && (
               <button
-                onClick={fetchConversionJobs}
-                disabled={loadingJobs}
-                className="btn btn-secondary flex items-center gap-2 text-sm"
+                onClick={deleteAllFailedJobs}
+                className="btn btn-secondary text-red-400 flex items-center gap-2 text-sm"
               >
-                {loadingJobs ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Refresh
+                <Trash2 className="h-4 w-4" />
+                Delete Failed
               </button>
-              {conversionJobs.filter(j => j.status === 'failed').length > 0 && (
-                <button
-                  onClick={deleteAllFailedJobs}
-                  className="btn btn-secondary text-red-400 flex items-center gap-2 text-sm"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete Failed
-                </button>
-              )}
-            </div>
+            )}
           </div>
+        </div>
 
-          {conversionJobs.length === 0 ? (
-            <div className="text-sm text-slate-400 text-center py-4">
-              {loadingJobs ? 'Loading...' : 'No conversion jobs found. Click Refresh to load.'}
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {conversionJobs
-                .filter(j => jobsFilter === 'all' || j.status === jobsFilter)
-                .map(job => (
-                  <div key={job.id} className="flex items-center justify-between bg-slate-700/50 rounded p-2 text-sm">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-white truncate">{job.title}</div>
-                      <div className="text-xs text-slate-400 flex items-center gap-2">
-                        <span className={`px-1.5 py-0.5 rounded text-xs ${
-                          job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
-                          job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
-                          job.status === 'processing' ? 'bg-blue-500/20 text-blue-400' :
-                          'bg-yellow-500/20 text-yellow-400'
-                        }`}>
-                          {job.status}
-                        </span>
-                        <span>{job.conversion_type}</span>
-                        {job.error_message && (
-                          <span className="text-red-400 truncate" title={job.error_message}>
-                            {job.error_message.slice(0, 50)}...
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 ml-2">
-                      {job.status === 'failed' && (
-                        <button
-                          onClick={() => retryConversionJob(job.id)}
-                          className="p-1 text-slate-400 hover:text-white"
-                          title="Retry"
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                        </button>
-                      )}
-                      {job.status !== 'processing' && (
-                        <button
-                          onClick={() => deleteConversionJob(job.id)}
-                          className="p-1 text-slate-400 hover:text-red-400"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+        {conversionJobs.length === 0 ? (
+          <div className="text-sm text-slate-400 text-center py-4">
+            {loadingJobs ? 'Loading...' : 'No conversion jobs found. Click Refresh to load.'}
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {conversionJobs
+              .filter(j => jobsFilter === 'all' || j.status === jobsFilter)
+              .map(job => (
+                <div key={job.id} className="flex items-center justify-between bg-slate-700/50 rounded p-2 text-sm">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-white truncate">{job.title}</div>
+                    <div className="text-xs text-slate-400 flex items-center gap-2">
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                        job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                        job.status === 'processing' ? 'bg-blue-500/20 text-blue-400' :
+                        'bg-yellow-500/20 text-yellow-400'
+                      }`}>
+                        {job.status}
+                      </span>
+                      <span>{job.conversion_type}</span>
                     </div>
                   </div>
-                ))}
-            </div>
-          )}
-        </div>
+                  <div className="flex items-center gap-1 ml-2">
+                    {job.status === 'failed' && (
+                      <button onClick={() => retryConversionJob(job.id)} className="p-1 text-slate-400 hover:text-white" title="Retry">
+                        <RefreshCw className="h-4 w-4" />
+                      </button>
+                    )}
+                    {job.status !== 'processing' && (
+                      <button onClick={() => deleteConversionJob(job.id)} className="p-1 text-slate-400 hover:text-red-400" title="Delete">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
       </SettingSection>
+    </div>
+  );
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'general':
+        return renderGeneralTab();
+      case 'services':
+        return renderServicesTab();
+      case 'viper':
+        return renderViperTab();
+      case 'media':
+        return renderMediaTab();
+      case 'cleanup':
+        return renderCleanupTab();
+      case 'convert':
+        return renderConvertTab();
+      default:
+        return renderGeneralTab();
+    }
+  };
+
+  // ============================================
+  // Main Render
+  // ============================================
+
+  return (
+    <div className="max-w-5xl mx-auto pb-24">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <Settings className="h-6 w-6 text-primary-400" />
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+        </div>
+        {hasChanges && (
+          <div className="flex items-center gap-2">
+            <button onClick={resetSettings} className="btn btn-secondary flex items-center gap-2">
+              <RotateCcw className="h-4 w-4" />
+              Reset
+            </button>
+            <button onClick={saveSettings} disabled={saving} className="btn btn-primary flex items-center gap-2">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Save
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="flex flex-wrap gap-2 mb-6 bg-slate-800/50 rounded-lg p-2">
+        {SETTINGS_TABS.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === tab.id
+                  ? 'bg-primary-500 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab Content - key forces re-render when settings load */}
+      <div key={Object.keys(settings).length > 0 ? 'loaded' : 'loading'}>
+        {renderTabContent()}
+      </div>
 
       {/* Floating Save Bar */}
       {hasChanges && (
         <div className="fixed bottom-0 left-0 right-0 bg-slate-900/95 border-t border-slate-700 p-4 z-50">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="max-w-5xl mx-auto flex items-center justify-between">
             <p className="text-sm text-slate-400">You have unsaved changes</p>
             <div className="flex items-center gap-2">
-              <button
-                onClick={resetSettings}
-                className="btn btn-secondary flex items-center gap-2"
-              >
+              <button onClick={resetSettings} className="btn btn-secondary flex items-center gap-2">
                 <RotateCcw className="h-4 w-4" />
                 Reset
               </button>
-              <button
-                onClick={saveSettings}
-                disabled={saving}
-                className="btn btn-primary flex items-center gap-2"
-              >
+              <button onClick={saveSettings} disabled={saving} className="btn btn-primary flex items-center gap-2">
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Save Changes
               </button>

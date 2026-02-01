@@ -1400,6 +1400,30 @@ app.get('/api/settings/detect-hardware', authenticate, requireAdmin, async (req,
   res.json(hardware);
 });
 
+// Get Plex libraries for auto-invite settings
+app.get('/api/settings/plex-libraries', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const PlexService = require('./services/plex');
+    const plex = PlexService.fromDb();
+
+    if (!plex) {
+      return res.status(400).json({ error: 'Plex is not configured' });
+    }
+
+    const libraries = await plex.getLibraries();
+    res.json({
+      libraries: libraries.map(lib => ({
+        id: lib.id,
+        title: lib.title,
+        type: lib.type
+      }))
+    });
+  } catch (err) {
+    console.error('[Settings] Error getting Plex libraries:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // =========================
 // SERVICES ROUTES (Admin Only)
 // =========================
