@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api, useAuth } from '../App';
 import {
   Settings, Clock, Film, RefreshCw, Calendar,
@@ -544,7 +544,6 @@ export default function SettingsPage() {
   const [addingService, setAddingService] = useState(false);
 
   // Discover providers state
-  const [enabledProviders, setEnabledProviders] = useState(DEFAULT_PROVIDER_IDS);
   const [allProviders, setAllProviders] = useState([]);
   const [loadingProviders, setLoadingProviders] = useState(false);
   const [providerSearch, setProviderSearch] = useState('');
@@ -561,11 +560,36 @@ export default function SettingsPage() {
   // Plex libraries for auto-invite
   const [plexLibraries, setPlexLibraries] = useState([]);
   const [loadingLibraries, setLoadingLibraries] = useState(false);
-  const [selectedLibraries, setSelectedLibraries] = useState([]);
 
   // Plex invitations tracking
   const [invitations, setInvitations] = useState([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
+
+  // Derive enabledProviders from settings synchronously (avoids useEffect timing gap)
+  const enabledProviders = useMemo(() => {
+    if (settings.discover_providers) {
+      try {
+        const parsed = JSON.parse(settings.discover_providers);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        // Use defaults on parse error
+      }
+    }
+    return DEFAULT_PROVIDER_IDS;
+  }, [settings.discover_providers]);
+
+  // Derive selectedLibraries from settings synchronously (avoids useEffect timing gap)
+  const selectedLibraries = useMemo(() => {
+    if (settings.auto_invite_libraries) {
+      try {
+        const parsed = JSON.parse(settings.auto_invite_libraries);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        // Use empty array on parse error
+      }
+    }
+    return [];
+  }, [settings.auto_invite_libraries]);
 
   useEffect(() => {
     fetchSettings();
@@ -574,34 +598,6 @@ export default function SettingsPage() {
     fetchPlexLibraries();
     fetchInvitations();
   }, []);
-
-  // Parse enabled providers from settings when settings load
-  useEffect(() => {
-    if (settings.discover_providers) {
-      try {
-        const parsed = JSON.parse(settings.discover_providers);
-        if (Array.isArray(parsed)) {
-          setEnabledProviders(parsed);
-        }
-      } catch (e) {
-        // Use defaults
-      }
-    }
-  }, [settings.discover_providers]);
-
-  // Parse auto-invite libraries from settings
-  useEffect(() => {
-    if (settings.auto_invite_libraries) {
-      try {
-        const parsed = JSON.parse(settings.auto_invite_libraries);
-        if (Array.isArray(parsed)) {
-          setSelectedLibraries(parsed);
-        }
-      } catch (e) {
-        // Use defaults
-      }
-    }
-  }, [settings.auto_invite_libraries]);
 
   const fetchSettings = async () => {
     try {
@@ -658,13 +654,11 @@ export default function SettingsPage() {
     const newSelected = selectedLibraries.includes(libraryId)
       ? selectedLibraries.filter(id => id !== libraryId)
       : [...selectedLibraries, libraryId];
-    setSelectedLibraries(newSelected);
     updateSetting('auto_invite_libraries', JSON.stringify(newSelected));
   };
 
   const selectAllLibraries = () => {
     const allIds = plexLibraries.map(lib => lib.id);
-    setSelectedLibraries(allIds);
     updateSetting('auto_invite_libraries', JSON.stringify(allIds));
   };
 
@@ -940,14 +934,12 @@ export default function SettingsPage() {
     const newEnabled = enabledProviders.includes(providerId)
       ? enabledProviders.filter(id => id !== providerId)
       : [...enabledProviders, providerId];
-    setEnabledProviders(newEnabled);
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
   const selectAllProviders = () => {
     const filtered = getFilteredProviders();
     const newEnabled = [...new Set([...enabledProviders, ...filtered.map(p => p.id)])];
-    setEnabledProviders(newEnabled);
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
@@ -955,7 +947,6 @@ export default function SettingsPage() {
     const filtered = getFilteredProviders();
     const filterIds = new Set(filtered.map(p => p.id));
     const newEnabled = enabledProviders.filter(id => !filterIds.has(id));
-    setEnabledProviders(newEnabled);
     updateSetting('discover_providers', JSON.stringify(newEnabled));
   };
 
