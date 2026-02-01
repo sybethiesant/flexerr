@@ -60,6 +60,8 @@ User Watchlist → Auto-Download → Watch → VIPER Cleanup → Re-watchlist Re
 
 ## Quick Start
 
+> **Now available on Docker Hub!** `docker pull sybersects/flexerr:latest`
+
 ### Requirements
 
 - **Docker** and **Docker Compose**
