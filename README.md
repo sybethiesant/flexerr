@@ -24,13 +24,13 @@
 
 ---
 
-Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr automatically downloads it via Sonarr/Radarr, and intelligently cleans it up when everyone's done watching.
+Flexerr manages your entire media lifecycle - from request to cleanup. Users add content to their watchlist, Flexerr coordinates with your media management tools (Sonarr/Radarr) to acquire and organize content, then intelligently cleans it up when everyone's done watching.
 
 ## Features
 
 - **Multi-Server Support** - Works with Plex (OAuth) and Jellyfin (username/password)
-- **Watchlist Integration** - Sync with Plex watchlists or Jellyfin favorites for automatic requests
-- **Auto-Download** - Watchlist additions trigger Sonarr/Radarr downloads automatically
+- **Watchlist Integration** - Sync with Plex watchlists or Jellyfin favorites for automatic media requests
+- **Media Automation** - Watchlist additions seamlessly integrate with Sonarr/Radarr for hands-free library management
 - **Auto-Invite** - Automatically invite new users to your Plex server with configured library access
 - **VIPER** - Intelligent episode cleanup based on user watch velocity
 - **Media Protection** - Protect specific movies/shows from any cleanup rules
@@ -44,17 +44,17 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 ## How It Works
 
 ```
-User Watchlist → Auto-Download → Watch → VIPER Cleanup → Re-watchlist Restores
+User Watchlist → Media Acquisition → Watch → VIPER Cleanup → Re-watchlist Restores
 ```
 
 1. User adds content to their Plex watchlist or Jellyfin favorites
-2. Flexerr detects the addition and sends to Sonarr/Radarr
-3. Content downloads automatically
+2. Flexerr detects the addition and coordinates with Sonarr/Radarr
+3. Content is acquired and organized in your library
 4. User watches the content
 5. VIPER tracks watch progress and velocity
 6. Cleanup rules add content to "Leaving Soon" collection (grace period)
 7. Content is cleaned up to save storage
-8. **If user re-adds to watchlist later**, Flexerr detects the re-add and triggers a fresh download cycle (restoration)
+8. **If user re-adds to watchlist later**, Flexerr detects the re-add and triggers a fresh acquisition cycle (restoration)
 
 **Note:** Protected items bypass all cleanup rules regardless of other settings.
 
@@ -209,10 +209,10 @@ Flexerr continuously syncs with Plex watchlists and Jellyfin favorites, detectin
 
 ### How It Works
 
-1. **Addition Detection** - New watchlist items trigger automatic download via Sonarr/Radarr
+1. **Addition Detection** - New watchlist items are automatically coordinated with Sonarr/Radarr
 2. **Removal Tracking** - Items removed from watchlist are marked as removed in Flexerr
 3. **Re-Add Detection** - If a user adds back a previously removed item, Flexerr detects this as a restoration
-4. **Automatic Restoration** - Re-added items trigger fresh download cycle, removing from exclusion lists and resetting lifecycle
+4. **Automatic Restoration** - Re-added items trigger fresh acquisition cycle, removing from exclusion lists and resetting lifecycle
 
 ### Use Case: Content Recovery
 
@@ -399,7 +399,7 @@ The admin dashboard provides:
 - Check username/password are correct
 - Ensure Jellyfin server is running and accepting connections
 
-### Downloads not starting
+### Media not being acquired
 
 - Verify Sonarr/Radarr connection in Connected Services
 - Check that the content has a TVDB/TMDB ID
