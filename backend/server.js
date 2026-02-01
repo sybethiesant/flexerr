@@ -2295,12 +2295,17 @@ const mapWebhookToFrontend = (w) => ({
   ...w,
   settings: w.settings ? JSON.parse(w.settings) : {},
   user_ids: w.user_ids ? JSON.parse(w.user_ids) : [],
-  // Map DB columns to frontend names
-  on_queue_add: !!w.on_leaving_soon,
+  // All trigger flags - use actual DB column names for clarity
+  on_request: !!w.on_request,
+  on_available: !!w.on_available,
+  on_leaving_soon: !!w.on_leaving_soon,
   on_delete: !!w.on_delete,
-  on_rule_complete: !!w.on_available,
+  on_restore: !!w.on_restore,
   on_error: !!w.on_error,
-  on_service_down: !!w.on_restore
+  on_viper_cleanup: !!w.on_viper_cleanup,
+  on_user_joined: !!w.on_user_joined,
+  on_download_started: !!w.on_download_started,
+  on_download_complete: !!w.on_download_complete
 });
 
 app.get('/api/webhooks', authenticate, requireAdmin, (req, res) => {
@@ -2311,7 +2316,8 @@ app.get('/api/webhooks', authenticate, requireAdmin, (req, res) => {
 app.post('/api/webhooks', authenticate, requireAdmin, (req, res) => {
   const {
     type, name, url, settings,
-    on_queue_add, on_delete, on_rule_complete, on_error, on_service_down,
+    on_request, on_available, on_leaving_soon, on_delete, on_restore, on_error,
+    on_viper_cleanup, on_user_joined, on_download_started, on_download_complete,
     user_ids
   } = req.body;
 
@@ -2320,17 +2326,25 @@ app.post('/api/webhooks', authenticate, requireAdmin, (req, res) => {
   }
 
   const result = db.prepare(`
-    INSERT INTO webhooks (type, name, url, settings, on_request, on_available, on_leaving_soon, on_delete, on_restore, on_error, user_ids)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO webhooks (
+      type, name, url, settings,
+      on_request, on_available, on_leaving_soon, on_delete, on_restore, on_error,
+      on_viper_cleanup, on_user_joined, on_download_started, on_download_complete,
+      user_ids
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     type, name, url,
     settings ? JSON.stringify(settings) : null,
-    0, // on_request - not used
-    on_rule_complete ? 1 : 0, // on_available maps to on_rule_complete
-    on_queue_add ? 1 : 0, // on_leaving_soon maps to on_queue_add
+    on_request ? 1 : 0,
+    on_available ? 1 : 0,
+    on_leaving_soon ? 1 : 0,
     on_delete ? 1 : 0,
-    on_service_down ? 1 : 0, // on_restore maps to on_service_down
+    on_restore ? 1 : 0,
     on_error ? 1 : 0,
+    on_viper_cleanup !== false ? 1 : 0,  // Default ON
+    on_user_joined ? 1 : 0,
+    on_download_started ? 1 : 0,
+    on_download_complete !== false ? 1 : 0,  // Default ON
     user_ids ? JSON.stringify(user_ids) : null
   );
 
@@ -2342,7 +2356,8 @@ app.put('/api/webhooks/:id', authenticate, requireAdmin, (req, res) => {
   const { id } = req.params;
   const {
     type, name, url, settings, is_active,
-    on_queue_add, on_delete, on_rule_complete, on_error, on_service_down,
+    on_request, on_available, on_leaving_soon, on_delete, on_restore, on_error,
+    on_viper_cleanup, on_user_joined, on_download_started, on_download_complete,
     user_ids
   } = req.body;
 
@@ -2354,8 +2369,10 @@ app.put('/api/webhooks/:id', authenticate, requireAdmin, (req, res) => {
   db.prepare(`
     UPDATE webhooks SET
       type = ?, name = ?, url = ?, settings = ?, is_active = ?,
-      on_available = ?, on_leaving_soon = ?,
-      on_delete = ?, on_restore = ?, on_error = ?, user_ids = ?
+      on_request = ?, on_available = ?, on_leaving_soon = ?,
+      on_delete = ?, on_restore = ?, on_error = ?,
+      on_viper_cleanup = ?, on_user_joined = ?, on_download_started = ?, on_download_complete = ?,
+      user_ids = ?
     WHERE id = ?
   `).run(
     type ?? existing.type,
@@ -2363,11 +2380,16 @@ app.put('/api/webhooks/:id', authenticate, requireAdmin, (req, res) => {
     url ?? existing.url,
     settings !== undefined ? JSON.stringify(settings) : existing.settings,
     is_active !== undefined ? (is_active ? 1 : 0) : existing.is_active,
-    on_rule_complete !== undefined ? (on_rule_complete ? 1 : 0) : existing.on_available,
-    on_queue_add !== undefined ? (on_queue_add ? 1 : 0) : existing.on_leaving_soon,
+    on_request !== undefined ? (on_request ? 1 : 0) : existing.on_request,
+    on_available !== undefined ? (on_available ? 1 : 0) : existing.on_available,
+    on_leaving_soon !== undefined ? (on_leaving_soon ? 1 : 0) : existing.on_leaving_soon,
     on_delete !== undefined ? (on_delete ? 1 : 0) : existing.on_delete,
-    on_service_down !== undefined ? (on_service_down ? 1 : 0) : existing.on_restore,
+    on_restore !== undefined ? (on_restore ? 1 : 0) : existing.on_restore,
     on_error !== undefined ? (on_error ? 1 : 0) : existing.on_error,
+    on_viper_cleanup !== undefined ? (on_viper_cleanup ? 1 : 0) : existing.on_viper_cleanup,
+    on_user_joined !== undefined ? (on_user_joined ? 1 : 0) : existing.on_user_joined,
+    on_download_started !== undefined ? (on_download_started ? 1 : 0) : existing.on_download_started,
+    on_download_complete !== undefined ? (on_download_complete ? 1 : 0) : existing.on_download_complete,
     user_ids !== undefined ? JSON.stringify(user_ids) : existing.user_ids,
     id
   );
