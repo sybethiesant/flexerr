@@ -980,8 +980,9 @@ export default function SettingsPage() {
   const mediaServer = services.find(s => s.type === 'plex' || s.type === 'jellyfin');
   const arrServices = services.filter(s => s.type === 'sonarr' || s.type === 'radarr');
 
-  // Wait for settings to be fully loaded and ready
-  if (loading || !settingsReady) {
+  // Wait for settings to be fully loaded - check for actual data, not just flags
+  const hasSettings = Object.keys(settings).length > 0;
+  if (loading || !hasSettings) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="h-12 w-12 text-primary-500 animate-spin" />
