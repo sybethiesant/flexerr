@@ -9,7 +9,6 @@ const PlexSync = require('./plex-sync');
 class Scheduler {
   constructor() {
     this.jobs = new Map();
-    this.isRunning = false;
     this.rulesEngine = new RulesEngine();
     this.viper = new Viper();
     this.watchlistPriority = getWatchlistPriorityService();
@@ -18,6 +17,113 @@ class Scheduler {
     this.lastWatchlistCheck = null;
     this.lastPlexSync = null;
     this.lastVelocityCleanup = null;
+
+    // Per-task locks instead of single global lock
+    this.locks = {
+      rules: { locked: false, lockedAt: null, task: null },
+      viper: { locked: false, lockedAt: null, task: null },
+      velocityCheck: { locked: false, lockedAt: null, task: null },
+      redownloadCheck: { locked: false, lockedAt: null, task: null }
+    };
+
+    // Lock timeout in milliseconds (30 minutes)
+    this.lockTimeoutMs = 30 * 60 * 1000;
+  }
+
+  // Acquire a lock for a specific task type
+  acquireLock(lockName, taskDescription) {
+    const lock = this.locks[lockName];
+    if (!lock) {
+      console.warn(`[Scheduler] Unknown lock: ${lockName}`);
+      return false;
+    }
+
+    // Check if lock is stale and auto-reset if needed
+    if (lock.locked && lock.lockedAt) {
+      const lockAge = Date.now() - lock.lockedAt.getTime();
+      if (lockAge > this.lockTimeoutMs) {
+        console.warn(`[Scheduler] Auto-resetting stale ${lockName} lock (held for ${Math.round(lockAge / 60000)} minutes by "${lock.task}")`);
+        log('warn', 'scheduler', `Auto-reset stale lock: ${lockName}`, {
+          task: lock.task,
+          held_minutes: Math.round(lockAge / 60000)
+        });
+        lock.locked = false;
+        lock.lockedAt = null;
+        lock.task = null;
+      }
+    }
+
+    if (lock.locked) {
+      return false;
+    }
+
+    lock.locked = true;
+    lock.lockedAt = new Date();
+    lock.task = taskDescription;
+    return true;
+  }
+
+  // Release a lock
+  releaseLock(lockName) {
+    const lock = this.locks[lockName];
+    if (lock) {
+      lock.locked = false;
+      lock.lockedAt = null;
+      lock.task = null;
+    }
+  }
+
+  // Check if a lock is held
+  isLocked(lockName) {
+    const lock = this.locks[lockName];
+    if (!lock) return false;
+
+    // Also check for stale locks
+    if (lock.locked && lock.lockedAt) {
+      const lockAge = Date.now() - lock.lockedAt.getTime();
+      if (lockAge > this.lockTimeoutMs) {
+        // Stale lock - will be auto-reset on next acquire attempt
+        return false;
+      }
+    }
+
+    return lock.locked;
+  }
+
+  // Check and reset all stale locks (called periodically)
+  checkAndResetStaleLocks() {
+    let resetCount = 0;
+    for (const [name, lock] of Object.entries(this.locks)) {
+      if (lock.locked && lock.lockedAt) {
+        const lockAge = Date.now() - lock.lockedAt.getTime();
+        if (lockAge > this.lockTimeoutMs) {
+          console.warn(`[Scheduler] Resetting stale ${name} lock (held for ${Math.round(lockAge / 60000)} minutes by "${lock.task}")`);
+          log('warn', 'scheduler', `Reset stale lock: ${name}`, {
+            task: lock.task,
+            held_minutes: Math.round(lockAge / 60000)
+          });
+          lock.locked = false;
+          lock.lockedAt = null;
+          lock.task = null;
+          resetCount++;
+        }
+      }
+    }
+    return resetCount;
+  }
+
+  // Legacy compatibility - check if ANY task is running (for backwards compat)
+  get isRunning() {
+    return Object.values(this.locks).some(lock => this.isLocked(Object.keys(this.locks).find(k => this.locks[k] === lock)));
+  }
+
+  // Legacy compatibility - set isRunning (maps to rules lock)
+  set isRunning(value) {
+    if (value) {
+      this.acquireLock('rules', 'legacy');
+    } else {
+      this.releaseLock('rules');
+    }
   }
 
   // Initialize the scheduler with configured schedule
@@ -78,6 +184,18 @@ class Scheduler {
     // Schedule velocity-based cleanup
     await this.scheduleVelocityCleanup();
 
+    // Schedule stale lock checker (every 5 minutes)
+    const staleLockJob = cron.schedule('*/5 * * * *', () => {
+      const resetCount = this.checkAndResetStaleLocks();
+      if (resetCount > 0) {
+        console.log(`[Scheduler] Reset ${resetCount} stale lock(s)`);
+      }
+    }, {
+      scheduled: true,
+      timezone: getSetting('timezone') || 'UTC'
+    });
+    this.jobs.set('stale-lock-checker', staleLockJob);
+
     log('info', 'system', `Scheduler started with schedule: ${schedule}`);
     console.log(`[Scheduler] Started with schedule: ${schedule}`);
   }
@@ -99,12 +217,11 @@ class Scheduler {
 
   // Run the main scheduled task
   async runScheduledTask() {
-    if (this.isRunning) {
+    if (!this.acquireLock('rules', 'scheduled rule execution')) {
       log('warn', 'system', 'Scheduled task already running, skipping');
       return;
     }
 
-    this.isRunning = true;
     log('info', 'system', 'Starting scheduled rule execution');
 
     try {
@@ -119,16 +236,17 @@ class Scheduler {
         error: error.message
       });
     } finally {
-      this.isRunning = false;
+      this.releaseLock('rules');
     }
   }
 
   // Process the queue (items with expired buffers)
   async processQueue() {
-    if (this.isRunning) return;
+    if (!this.acquireLock('rules', 'queue processing')) {
+      return;
+    }
 
     try {
-      this.isRunning = true;
       const processed = await this.rulesEngine.processQueue();
       if (processed > 0) {
         log('info', 'system', `Queue processor: ${processed} items processed`);
@@ -136,7 +254,7 @@ class Scheduler {
     } catch (error) {
       log('error', 'system', 'Queue processing failed', { error: error.message });
     } finally {
-      this.isRunning = false;
+      this.releaseLock('rules');
     }
   }
 
@@ -157,8 +275,8 @@ class Scheduler {
 
   // Clean up stale queue items that no longer match rules
   async cleanupStaleQueue() {
-    if (this.isRunning) {
-      console.log('[Scheduler] Skipping queue cleanup - another task is running');
+    if (!this.acquireLock('rules', 'queue cleanup')) {
+      console.log('[Scheduler] Skipping queue cleanup - rules task is running');
       return;
     }
 
@@ -171,37 +289,37 @@ class Scheduler {
     } catch (error) {
       console.error('[Scheduler] Queue cleanup failed:', error.message);
       log('error', 'system', 'Queue cleanup failed', { error: error.message });
+    } finally {
+      this.releaseLock('rules');
     }
   }
 
   // Manual trigger
   async runNow(dryRun = null) {
-    if (this.isRunning) {
-      throw new Error('A task is already running');
+    if (!this.acquireLock('rules', 'manual rule execution')) {
+      throw new Error('A rules task is already running');
     }
 
-    this.isRunning = true;
     try {
       const results = await this.rulesEngine.runAllRules(dryRun);
       return results;
     } finally {
-      this.isRunning = false;
+      this.releaseLock('rules');
     }
   }
 
   // Run a single rule
   async runRule(ruleId, dryRun = true) {
-    if (this.isRunning) {
-      throw new Error('A task is already running');
+    if (!this.acquireLock('rules', `rule ${ruleId} execution`)) {
+      throw new Error('A rules task is already running');
     }
 
-    const rule = this.rulesEngine.getRule(ruleId);
-    if (!rule) {
-      throw new Error('Rule not found');
-    }
-
-    this.isRunning = true;
     try {
+      const rule = this.rulesEngine.getRule(ruleId);
+      if (!rule) {
+        throw new Error('Rule not found');
+      }
+
       const matches = await this.rulesEngine.evaluateRule(rule, dryRun);
       const results = [];
 
@@ -221,15 +339,23 @@ class Scheduler {
         results
       };
     } finally {
-      this.isRunning = false;
+      this.releaseLock('rules');
     }
   }
 
-  // Force reset the running lock (emergency use)
+  // Force reset all locks (emergency use)
   resetLock() {
-    const wasRunning = this.isRunning;
-    this.isRunning = false;
-    return wasRunning;
+    let wasLocked = false;
+    for (const [name, lock] of Object.entries(this.locks)) {
+      if (lock.locked) {
+        console.log(`[Scheduler] Force-resetting ${name} lock (was running "${lock.task}")`);
+        wasLocked = true;
+        lock.locked = false;
+        lock.lockedAt = null;
+        lock.task = null;
+      }
+    }
+    return wasLocked;
   }
 
   // Preview what a rule would match (always dry run, no actions)
@@ -320,8 +446,8 @@ class Scheduler {
 
   // Run velocity change detection
   async runVelocityCheck() {
-    if (this.isRunning) {
-      console.log('[Scheduler] Skipping velocity check - another task is running');
+    if (!this.acquireLock('velocityCheck', 'velocity change detection')) {
+      console.log('[Scheduler] Skipping velocity check - already running');
       return;
     }
 
@@ -344,13 +470,15 @@ class Scheduler {
     } catch (error) {
       console.error('[Scheduler] Velocity check failed:', error.message);
       log('error', 'viper', 'Velocity check failed', { error: error.message });
+    } finally {
+      this.releaseLock('velocityCheck');
     }
   }
 
   // Run proactive redownload check
   async runRedownloadCheck() {
-    if (this.isRunning) {
-      console.log('[Scheduler] Skipping redownload check - another task is running');
+    if (!this.acquireLock('redownloadCheck', 'proactive redownload check')) {
+      console.log('[Scheduler] Skipping redownload check - already running');
       return;
     }
 
@@ -380,6 +508,8 @@ class Scheduler {
     } catch (error) {
       console.error('[Scheduler] Redownload check failed:', error.message);
       log('error', 'viper', 'Redownload check failed', { error: error.message });
+    } finally {
+      this.releaseLock('redownloadCheck');
     }
   }
 
@@ -658,8 +788,8 @@ class Scheduler {
 
   // Run velocity-based cleanup
   async runVelocityCleanup(dryRunOverride = null) {
-    if (this.isRunning) {
-      console.log('[Scheduler] Skipping velocity cleanup - another task is running');
+    if (!this.acquireLock('viper', 'velocity cleanup')) {
+      console.log('[Scheduler] Skipping velocity cleanup - VIPER task already running');
       return { skipped: true };
     }
 
@@ -667,7 +797,6 @@ class Scheduler {
     const dryRun = dryRunOverride !== null ? dryRunOverride : getSetting('dry_run') === 'true';
 
     try {
-      this.isRunning = true;
       console.log(`[Scheduler] Running velocity cleanup (dryRun: ${dryRun})...`);
 
       await this.viper.initialize();
@@ -725,7 +854,7 @@ class Scheduler {
       log('error', 'velocity-cleanup', 'Cleanup failed', { error: error.message });
       return { error: error.message };
     } finally {
-      this.isRunning = false;
+      this.releaseLock('viper');
     }
   }
 
@@ -756,9 +885,20 @@ class Scheduler {
     const watchlistInterval = parseInt(getSetting('watchlist_priority_interval')) || 1;
     const plexSyncInterval = parseInt(getSetting('plex_sync_interval')) || 60;
 
+    // Build lock status
+    const lockStatus = {};
+    for (const [name, lock] of Object.entries(this.locks)) {
+      lockStatus[name] = {
+        locked: lock.locked,
+        task: lock.task,
+        lockedFor: lock.lockedAt ? Math.round((Date.now() - lock.lockedAt.getTime()) / 1000) + 's' : null
+      };
+    }
+
     return {
       running: this.jobs.size > 0, // Scheduler is "running" if jobs are scheduled
-      isRunning: this.isRunning,   // A job is currently executing
+      isRunning: this.isRunning,   // Legacy: any lock is held
+      locks: lockStatus,           // Per-task lock status
       jobs: Array.from(this.jobs.keys()),
       schedule: getSetting('schedule') || '0 2 * * *',
       timezone: getSetting('timezone') || 'UTC',
