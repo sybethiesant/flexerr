@@ -3699,18 +3699,12 @@ app.get('/api/leaving-soon', authenticate, async (req, res) => {
     const now = new Date();
     const daysRemaining = Math.ceil((actionDate - now) / (1000 * 60 * 60 * 24));
 
-    // Check if on current user's watchlist
-    const onWatchlist = item.tmdb_id ? db.prepare(`
-      SELECT COUNT(*) as count FROM watchlist
-      WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND is_active = 1
-    `).get(req.user.userId, item.tmdb_id, item.media_type)?.count > 0 : false;
-
-    // Check if on any user's watchlist
-    const protectedBy = item.tmdb_id ? db.prepare(`
-      SELECT u.username FROM watchlist w
-      JOIN users u ON w.user_id = u.id
-      WHERE w.tmdb_id = ? AND w.media_type = ? AND w.is_active = 1
-    `).all(item.tmdb_id, item.media_type) : [];
+    // Check if manually protected (exclusions table - bypasses all rules)
+    const mediaTypeForProtection = item.media_type === 'episode' ? 'tv' : item.media_type;
+    const isProtected = item.tmdb_id ? db.prepare(`
+      SELECT COUNT(*) as count FROM exclusions
+      WHERE tmdb_id = ? AND media_type = ? AND type = 'manual_protection'
+    `).get(item.tmdb_id, mediaTypeForProtection)?.count > 0 : false;
 
     // Use shared utility for image fetching
     const posterUrl = await TMDBService.getQueueItemImage(item, posterCache);
@@ -3720,9 +3714,7 @@ app.get('/api/leaving-soon', authenticate, async (req, res) => {
       poster_url: posterUrl,
       daysRemaining,
       isExpired: daysRemaining < 0,
-      onYourWatchlist: onWatchlist,
-      protectedBy: protectedBy.map(p => p.username),
-      isProtected: protectedBy.length > 0
+      isProtected
     };
   }));
 
