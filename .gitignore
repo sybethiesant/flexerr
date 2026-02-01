@@ -42,11 +42,12 @@ docker-compose.override.yml
 coverage/
 .nyc_output/
 
-# Documentation (keep only README, CHANGELOG, DOCKERHUB)
+# Documentation (keep only specific md files)
 *.md
 !README.md
 !CHANGELOG.md
 !DOCKERHUB.md
+!INSTALLATION.md
 
 # Private audit logs (not for git)
 AUDIT_LOG.md
