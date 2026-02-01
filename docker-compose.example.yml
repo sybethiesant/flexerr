@@ -4,7 +4,7 @@
 # Quick start:
 #   docker compose up -d
 #
-# Then open http://localhost:3100 in your browser
+# Then open http://localhost:5505 in your browser
 
 services:
   flexerr:
@@ -12,14 +12,14 @@ services:
     container_name: flexerr
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "5505:5505"
     volumes:
       - flexerr-data:/app/data
       # Optional: Mount media folder for Auto Convert feature
       # - /path/to/your/media:/Media
     environment:
       - TZ=America/Los_Angeles
-      - PORT=3100
+      - PORT=5505
       - NODE_ENV=production
       # Optional: Set a fixed JWT secret (auto-generated if not set)
       # - JWT_SECRET=your-secret-here

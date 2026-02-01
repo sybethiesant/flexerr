@@ -4,19 +4,19 @@ services:
     container_name: flexerr
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "5505:5505"
     volumes:
       - flexerr-data:/app/data
       # Optional: Mount your media folder for direct file operations
       # - /path/to/your/media:/media
     environment:
       - TZ=${TZ:-UTC}
-      - PORT=3100
+      - PORT=5505
       - NODE_ENV=production
       # Optional: Set a fixed JWT secret (auto-generated if not set)
       # - JWT_SECRET=your-secret-here
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/api/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5505/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

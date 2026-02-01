@@ -19,13 +19,13 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 ```bash
 docker run -d \
   --name flexerr \
-  -p 3100:3100 \
+  -p 5505:5505 \
   -v flexerr-data:/app/data \
   -e TZ=America/Los_Angeles \
   sybersects/flexerr:latest
 ```
 
-Then open http://localhost:3100
+Then open http://localhost:5505
 
 ## Docker Compose
 
@@ -36,7 +36,7 @@ services:
     container_name: flexerr
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "5505:5505"
     volumes:
       - flexerr-data:/app/data
     environment:
@@ -53,7 +53,7 @@ docker run -d \
   --name flexerr \
   --runtime=nvidia \
   -e NVIDIA_VISIBLE_DEVICES=all \
-  -p 3100:3100 \
+  -p 5505:5505 \
   -v flexerr-data:/app/data \
   sybersects/flexerr:latest
 ```

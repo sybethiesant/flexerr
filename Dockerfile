@@ -58,18 +58,18 @@ RUN mkdir -p /app/data
 
 # Environment
 ENV NODE_ENV=production
-ENV PORT=3100
+ENV PORT=5505
 ENV DATA_PATH=/app/data
 # NVIDIA Container Toolkit environment (used when --runtime=nvidia is enabled)
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
 # Expose port
-EXPOSE 3100
+EXPOSE 5505
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3100/api/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:5505/api/health || exit 1
 
 # Start
 CMD ["node", "server.js"]

@@ -94,7 +94,7 @@ cd flexerr
 docker compose up -d
 ```
 
-3. Open http://localhost:3100 in your browser
+3. Open http://localhost:5505 in your browser
 
 4. Choose your media server type:
    - **Plex**: Sign in with your Plex account (first user becomes admin)
@@ -113,7 +113,7 @@ That's it! Users can now browse content, add to watchlists, and Flexerr handles 
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | Server port | `3100` |
+| `PORT` | Server port | `5505` |
 | `TZ` | Timezone for scheduled tasks | `UTC` |
 | `JWT_SECRET` | Secret for JWT tokens | Auto-generated |
 | `NODE_ENV` | Environment mode | `production` |
@@ -178,7 +178,7 @@ docker run -d \
   --runtime=nvidia \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
-  -p 3100:3100 \
+  -p 5505:5505 \
   -v flexerr-data:/app/data \
   -v /path/to/media:/Media \
   flexerr
