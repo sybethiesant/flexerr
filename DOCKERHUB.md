@@ -20,6 +20,17 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 
 ## Quick Start
 
+**Docker Hub:**
+```bash
+docker pull sybersects/flexerr:latest
+```
+
+**GitHub Container Registry:**
+```bash
+docker pull ghcr.io/sybethiesant/flexerr:latest
+```
+
+**Run:**
 ```bash
 docker run -d \
   --name flexerr \
@@ -64,7 +75,7 @@ docker run -d \
 
 ## Documentation
 
-Full documentation: https://github.com/sybersects/flexerr
+Full documentation: https://github.com/sybethiesant/flexerr
 
 ## Supported Architectures
 
