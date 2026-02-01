@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sybersects/flexerr/main/flexerr-logo.png" alt="Flexerr Logo" width="200">
+  <img src="https://raw.githubusercontent.com/sybethiesant/flexerr/main/flexerr-logo.png" alt="Flexerr Logo" width="200">
 </p>
 
 # Flexerr
