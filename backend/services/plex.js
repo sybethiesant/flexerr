@@ -952,27 +952,30 @@ class PlexService {
    * @param {string} inviteEmail - Email of the user to invite
    * @param {Array<string>} librarySectionIds - Library section IDs to share (empty = all)
    */
-  static async inviteUserToServer(adminToken, machineIdentifier, inviteEmail, librarySectionIds = []) {
+  static async inviteUserToServer(adminToken, machineIdentifier, userPlexId, librarySectionIds = []) {
     try {
-      console.log(`[Plex] Inviting ${inviteEmail} to server ${machineIdentifier}`);
+      console.log(`[Plex] Inviting user ${userPlexId} to server ${machineIdentifier}`);
       console.log(`[Plex] Libraries to share: ${librarySectionIds.length > 0 ? librarySectionIds.join(', ') : 'all'}`);
 
-      // Build the sharing settings
-      const sharingSettings = {
+      // Use Plex.tv API - requires invited_id (Plex user ID), not email
+      // POST to /api/servers/{machineId}/shared_servers
+      const shareData = {
         server_id: machineIdentifier,
         shared_server: {
-          library_section_ids: librarySectionIds.length > 0 ? librarySectionIds : undefined,
-          invited_email: inviteEmail
+          library_section_ids: librarySectionIds.length > 0 ? librarySectionIds.map(id => parseInt(id)) : [],
+          invited_id: parseInt(userPlexId)
         }
       };
 
+      console.log(`[Plex] Request URL: https://plex.tv/api/servers/${machineIdentifier}/shared_servers`);
+      console.log(`[Plex] Request body: ${JSON.stringify(shareData)}`);
+
       const response = await axios.post(
-        'https://plex.tv/api/v2/shared_servers',
-        sharingSettings,
+        `https://plex.tv/api/servers/${machineIdentifier}/shared_servers`,
+        shareData,
         {
           headers: {
             'X-Plex-Token': adminToken,
-            'X-Plex-Client-Identifier': PLEX_CLIENT_ID,
             'Accept': 'application/json',
             'Content-Type': 'application/json'
           }
