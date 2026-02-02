@@ -14,6 +14,34 @@ const JellyfinMediaServer = require('./media-server/jellyfin-media-server');
 const CategorizationEngine = require('./categorization-engine');
 const CollectionSync = require('./collection-sync');
 
+/**
+ * Normalize a title for comparison
+ * Handles common character substitutions (1↔I, 0↔O, etc.)
+ * This fixes issues like "PLUR1BUS" vs "Pluribus"
+ */
+function normalizeTitle(title) {
+  if (!title) return '';
+  return title
+    .toLowerCase()
+    .replace(/1/g, 'i')    // 1 → i (e.g., PLUR1BUS → pluribus)
+    .replace(/0/g, 'o')    // 0 → o
+    .replace(/3/g, 'e')    // 3 → e (l33t speak)
+    .replace(/4/g, 'a')    // 4 → a
+    .replace(/5/g, 's')    // 5 → s
+    .replace(/7/g, 't')    // 7 → t
+    .replace(/[@]/g, 'a')  // @ → a
+    .replace(/[^a-z0-9\s]/g, '') // Remove special chars
+    .replace(/\s+/g, ' ')  // Normalize whitespace
+    .trim();
+}
+
+/**
+ * Check if two titles match (with normalization)
+ */
+function titlesMatch(title1, title2) {
+  return normalizeTitle(title1) === normalizeTitle(title2);
+}
+
 class WatchlistTriggerService {
   constructor() {
     this.sonarr = null;
@@ -1022,15 +1050,21 @@ class WatchlistTriggerService {
             continue;
           }
 
-          // Find best match by title and year
+          // Find best match by title and year (using normalized comparison for character substitutions)
+          // This handles cases like "PLUR1BUS" (Plex) vs "Pluribus" (TMDB)
           let tmdbMatch = searchResults.find(r =>
-            r.title?.toLowerCase() === item.title?.toLowerCase() &&
-            r.year === item.year
+            titlesMatch(r.title, item.title) && r.year === item.year
+          ) || searchResults.find(r =>
+            titlesMatch(r.title, item.title)
+          ) || searchResults.find(r =>
+            r.title?.toLowerCase() === item.title?.toLowerCase() && r.year === item.year
           ) || searchResults.find(r =>
             r.title?.toLowerCase() === item.title?.toLowerCase()
           ) || searchResults[0];
 
           const tmdbId = tmdbMatch.id;
+          // Use TMDB's canonical title (not Plex's potentially stylized version)
+          const canonicalTitle = tmdbMatch.title;
 
           // Track this item as being in Plex watchlist
           plexWatchlistTmdbIds.add(`${tmdbId}-${mediaType}`);
@@ -1042,6 +1076,13 @@ class WatchlistTriggerService {
           `).get(userId, tmdbId, mediaType);
 
           if (existing) {
+            // Update title if it differs (keeps DB consistent with TMDB canonical title)
+            // This fixes issues where Plex shows stylized titles like "PLUR1BUS" but TMDB has "Pluribus"
+            if (existing.title !== canonicalTitle) {
+              console.log(`[WatchlistSync] Updating title: "${existing.title}" → "${canonicalTitle}"`);
+              db.prepare('UPDATE watchlist SET title = ? WHERE id = ?').run(canonicalTitle, existing.id);
+              db.prepare('UPDATE requests SET title = ? WHERE tmdb_id = ? AND media_type = ?').run(canonicalTitle, tmdbId, mediaType);
+            }
             results.alreadyExists++;
             continue;
           }
@@ -1061,24 +1102,27 @@ class WatchlistTriggerService {
               ? await TMDBService.getMovie(tmdbId)
               : await TMDBService.getTVShow(tmdbId);
 
-            // Re-activate the watchlist entry
+            // Re-activate the watchlist entry and update title to TMDB canonical
+            // This fixes title mismatches like "PLUR1BUS" → "Pluribus"
             db.prepare(`
               UPDATE watchlist SET
                 is_active = 1,
                 added_at = CURRENT_TIMESTAMP,
-                removed_at = NULL
+                removed_at = NULL,
+                title = ?
               WHERE id = ?
-            `).run(previouslyRemoved.id);
+            `).run(details.title, previouslyRemoved.id);
 
-            // Reset the request status to trigger fresh download
+            // Reset the request status to trigger fresh download and update title
             const existingRequest = this.getRequest(tmdbId, mediaType);
             if (existingRequest) {
               db.prepare(`
                 UPDATE requests SET
                   status = 'pending',
-                  available_at = NULL
+                  available_at = NULL,
+                  title = ?
                 WHERE tmdb_id = ? AND media_type = ?
-              `).run(tmdbId, mediaType);
+              `).run(details.title, tmdbId, mediaType);
             }
 
             // Handle restoration (remove from exclusions, reset lifecycle, etc.)
