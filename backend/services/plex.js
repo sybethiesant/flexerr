@@ -251,6 +251,37 @@ class PlexService {
     return response.data.MediaContainer.Metadata || [];
   }
 
+  /**
+   * Promote all collections in all libraries to Recommended
+   */
+  async promoteAllCollectionsToRecommended() {
+    const results = { promoted: [], failed: [] };
+
+    try {
+      const libraries = await this.getLibraries();
+
+      for (const library of libraries) {
+        const collections = await this.getCollections(library.id);
+
+        for (const collection of collections) {
+          try {
+            await this.promoteCollectionToRecommended(collection.ratingKey);
+            results.promoted.push({ library: library.title, collection: collection.title });
+            console.log(`[Plex] Promoted "${collection.title}" in "${library.title}" to Recommended`);
+          } catch (error) {
+            results.failed.push({ library: library.title, collection: collection.title, error: error.message });
+          }
+          // Small delay to avoid hammering the API
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    } catch (error) {
+      console.error(`[Plex] Failed to promote collections: ${error.message}`);
+    }
+
+    return results;
+  }
+
   async createCollection(libraryId, title, description = '') {
     const response = await this.client.post(`/library/collections`, null, {
       params: {
@@ -276,7 +307,39 @@ class PlexService {
     await this.client.delete(`/library/collections/${collectionRatingKey}/items/${itemRatingKey}`);
   }
 
-  async getOrCreateCollection(libraryId, title, description = '', itemType = null) {
+  /**
+   * Promote a collection to show in the library's Recommended tab
+   */
+  async promoteCollectionToRecommended(collectionRatingKey) {
+    try {
+      // Set collection to be promoted to recommended/home
+      await this.client.put(`/library/collections/${collectionRatingKey}/prefs`, null, {
+        params: {
+          'collectionMode': 2,  // 0=default, 1=hide, 2=show collection
+          'contentRating': ''   // Clear any content rating restrictions
+        }
+      });
+
+      // Also try the direct visibility endpoint (works on newer Plex versions)
+      try {
+        await this.client.put(`/library/metadata/${collectionRatingKey}`, null, {
+          params: {
+            'promotedToRecommended.value': 1,
+            'promotedToOwnHome.value': 1
+          }
+        });
+      } catch (e) {
+        // Older Plex versions may not support this, that's OK
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`[Plex] Failed to promote collection to recommended: ${error.message}`);
+      return false;
+    }
+  }
+
+  async getOrCreateCollection(libraryId, title, description = '', itemType = null, promoteToRecommended = true) {
     const collections = await this.getCollections(libraryId);
     let collection = collections.find(c => c.title === title);
 
@@ -300,11 +363,19 @@ class PlexService {
 
         const newCollections = await this.getCollections(libraryId);
         collection = newCollections.find(c => c.title === episodeTitle);
+
+        // Promote to Recommended tab
+        if (collection && promoteToRecommended) {
+          await this.promoteCollectionToRecommended(collection.ratingKey);
+          console.log(`[Plex] Promoted collection "${episodeTitle}" to Recommended`);
+        }
       }
       return collection;
     }
 
+    let isNewCollection = false;
     if (!collection) {
+      isNewCollection = true;
       // Create the collection
       const libs = await this.getLibraries();
       const lib = libs.find(l => l.id === libraryId.toString());
@@ -332,6 +403,12 @@ class PlexService {
       // Fetch the created collection
       const newCollections = await this.getCollections(libraryId);
       collection = newCollections.find(c => c.title === title);
+    }
+
+    // Promote newly created collections to Recommended tab
+    if (collection && isNewCollection && promoteToRecommended) {
+      await this.promoteCollectionToRecommended(collection.ratingKey);
+      console.log(`[Plex] Promoted collection "${title}" to Recommended`);
     }
 
     return collection;

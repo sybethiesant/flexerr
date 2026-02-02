@@ -1635,6 +1635,25 @@ app.get('/api/plex/libraries', authenticate, async (req, res) => {
   }
 });
 
+// Promote all collections to Recommended tab
+app.post('/api/plex/collections/promote-all', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const plex = PlexService.fromDb();
+    if (!plex) {
+      return res.status(400).json({ error: 'Plex not configured' });
+    }
+    const results = await plex.promoteAllCollectionsToRecommended();
+    res.json({
+      success: true,
+      promoted: results.promoted.length,
+      failed: results.failed.length,
+      details: results
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Proxy Plex images for queue items (uses stored poster_url from database)
 // No auth required - images served from Plex via server-side token
 app.get('/api/plex/image/queue/:id', async (req, res) => {
