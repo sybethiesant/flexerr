@@ -600,7 +600,7 @@ class AuthService {
     // Generate tokens
     const tokens = this.generateTokens(user);
 
-    return {
+    const result = {
       success: true,
       user: {
         id: user.id,
@@ -612,6 +612,14 @@ class AuthService {
       },
       ...tokens
     };
+
+    // If user doesn't have server access, include warning
+    if (access.needsServerAccess) {
+      result.warning = 'You have been logged in, but the automatic Plex server invite failed. Please contact the admin to get server access.';
+      result.needsServerAccess = true;
+    }
+
+    return result;
   }
 
   /**

@@ -597,7 +597,9 @@ app.get('/api/auth/plex/callback/:id', async (req, res) => {
       plexToken: pinResult.token,
       user: loginResult.user,
       accessToken: loginResult.accessToken,
-      refreshToken: loginResult.refreshToken
+      refreshToken: loginResult.refreshToken,
+      warning: loginResult.warning || null,
+      needsServerAccess: loginResult.needsServerAccess || false
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

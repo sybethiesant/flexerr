@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, useAuth } from '../App';
 import { Film, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 // Flexerr uses Plex OAuth - this page handles user sign-in
 function Login() {
@@ -50,6 +51,12 @@ function Login() {
               localStorage.setItem('flexerr_access_token', checkRes.data.accessToken);
               localStorage.setItem('flexerr_refresh_token', checkRes.data.refreshToken);
               localStorage.setItem('flexerr_user', JSON.stringify(checkRes.data.user));
+
+              // Show warning if auto-invite failed
+              if (checkRes.data.warning) {
+                toast.error(checkRes.data.warning, { duration: 8000 });
+              }
+
               // Reload to pick up new auth state
               window.location.href = '/';
             } else if (checkRes.data.plexToken) {
