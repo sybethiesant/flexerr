@@ -172,7 +172,15 @@ class AuthService {
             invited: true
           };
         }
-        return { success: false, error: 'User does not have access to the configured Plex server' };
+        // Auto-invite failed or disabled - still allow login but they'll have limited access
+        // Admin can manually invite them via Plex
+        console.log(`[Auth] User ${userInfo?.email || 'unknown'} doesn't have server access, allowing login anyway`);
+        return {
+          success: true,
+          server: null,
+          isOwner: false,
+          needsServerAccess: true
+        };
       }
 
       return {
@@ -239,12 +247,12 @@ class AuthService {
       }
     }
 
-    // Send the invitation
-    console.log(`[Auth] Auto-inviting ${userInfo.email} to Plex server`);
+    // Send the invitation using Plex user ID (not email - API requires user ID)
+    console.log(`[Auth] Auto-inviting ${userInfo.email} (Plex ID: ${userInfo.plex_id}) to Plex server`);
     const inviteResult = await PlexService.inviteUserToServer(
       adminUser.plex_token,
       machineId,
-      userInfo.email,
+      userInfo.plex_id,
       librarySectionIds
     );
 
