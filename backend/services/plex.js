@@ -252,7 +252,8 @@ class PlexService {
   }
 
   /**
-   * Promote all collections in all libraries to Recommended
+   * Pin all collections in all libraries to Recommended with proper sorting
+   * Order: New Releases first, then genres alphabetically, Leaving Soon last
    */
   async promoteAllCollectionsToRecommended() {
     const results = { promoted: [], failed: [] };
@@ -261,18 +262,41 @@ class PlexService {
       const libraries = await this.getLibraries();
 
       for (const library of libraries) {
-        const collections = await this.getCollections(library.id);
+        console.log(`[Plex] Processing library: ${library.title}`);
 
-        for (const collection of collections) {
+        // Get and sort collections
+        const collections = await this.getCollections(library.id);
+        const sorted = collections.sort((a, b) => {
+          const aTitle = a.title.toLowerCase();
+          const bTitle = b.title.toLowerCase();
+          if (aTitle.includes('new release')) return -1;
+          if (bTitle.includes('new release')) return 1;
+          if (aTitle === 'leaving soon') return 1;
+          if (bTitle === 'leaving soon') return -1;
+          return aTitle.localeCompare(bTitle);
+        });
+
+        // Unpin existing collections first to reset order
+        try {
+          const managedRes = await this.client.get(`/hubs/sections/${library.id}/manage`);
+          const hubs = managedRes.data?.MediaContainer?.Hub || [];
+          const collectionHubs = hubs.filter(h => h.identifier.startsWith('custom.collection'));
+          for (const hub of collectionHubs) {
+            try {
+              await this.client.delete(`/hubs/sections/${library.id}/manage/${encodeURIComponent(hub.identifier)}`);
+            } catch (e) { /* ignore */ }
+          }
+        } catch (e) { /* ignore */ }
+
+        // Pin in sorted order
+        for (const collection of sorted) {
           try {
-            await this.promoteCollectionToRecommended(collection.ratingKey);
+            await this.pinCollectionToRecommended(library.id, collection.ratingKey, collection.title);
             results.promoted.push({ library: library.title, collection: collection.title });
-            console.log(`[Plex] Promoted "${collection.title}" in "${library.title}" to Recommended`);
           } catch (error) {
             results.failed.push({ library: library.title, collection: collection.title, error: error.message });
           }
-          // Small delay to avoid hammering the API
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
     } catch (error) {
@@ -308,33 +332,101 @@ class PlexService {
   }
 
   /**
-   * Promote a collection to show in the library's Recommended tab
+   * Pin a collection to the library's Recommended tab using hub management API
    */
-  async promoteCollectionToRecommended(collectionRatingKey) {
+  async pinCollectionToRecommended(libraryId, collectionRatingKey, collectionTitle) {
     try {
-      // Set collection to be promoted to recommended/home
-      await this.client.put(`/library/collections/${collectionRatingKey}/prefs`, null, {
+      // Pin collection to Recommended using hub management API
+      await this.client.post(`/hubs/sections/${libraryId}/manage`, null, {
         params: {
-          'collectionMode': 2,  // 0=default, 1=hide, 2=show collection
-          'contentRating': ''   // Clear any content rating restrictions
+          metadataItemId: collectionRatingKey,
+          promotedToRecommended: 1
         }
       });
 
-      // Also try the direct visibility endpoint (works on newer Plex versions)
-      try {
-        await this.client.put(`/library/metadata/${collectionRatingKey}`, null, {
-          params: {
-            'promotedToRecommended.value': 1,
-            'promotedToOwnHome.value': 1
-          }
-        });
-      } catch (e) {
-        // Older Plex versions may not support this, that's OK
-      }
+      // Set visibility options
+      const identifier = `custom.collection.${libraryId}.${collectionRatingKey}`;
+      await this.client.put(`/hubs/sections/${libraryId}/manage/${encodeURIComponent(identifier)}`, null, {
+        params: {
+          promotedToRecommended: 1,
+          recommendationsVisibility: 'all'
+        }
+      });
 
+      console.log(`[Plex] Pinned collection "${collectionTitle}" to Recommended in library ${libraryId}`);
       return true;
     } catch (error) {
-      console.error(`[Plex] Failed to promote collection to recommended: ${error.message}`);
+      console.error(`[Plex] Failed to pin collection to recommended: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Reorder all collection hubs in a library to maintain proper sort order
+   * Order: New Releases first, then genres alphabetically, Leaving Soon last
+   */
+  async reorderCollectionHubs(libraryId) {
+    try {
+      // Get current managed hubs
+      const managedRes = await this.client.get(`/hubs/sections/${libraryId}/manage`);
+      const hubs = managedRes.data?.MediaContainer?.Hub || [];
+
+      // Find all collection hubs
+      const collectionHubs = hubs.filter(h => h.identifier.startsWith('custom.collection'));
+      if (collectionHubs.length === 0) return;
+
+      // Unpin all collections
+      for (const hub of collectionHubs) {
+        try {
+          await this.client.delete(`/hubs/sections/${libraryId}/manage/${encodeURIComponent(hub.identifier)}`);
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+
+      // Sort collections: New Releases first, then alphabetically, Leaving Soon last
+      collectionHubs.sort((a, b) => {
+        const aTitle = a.title.toLowerCase();
+        const bTitle = b.title.toLowerCase();
+
+        if (aTitle.includes('new release')) return -1;
+        if (bTitle.includes('new release')) return 1;
+        if (aTitle === 'leaving soon') return 1;
+        if (bTitle === 'leaving soon') return -1;
+        return aTitle.localeCompare(bTitle);
+      });
+
+      // Re-pin in sorted order
+      for (const hub of collectionHubs) {
+        const match = hub.identifier.match(/custom\.collection\.(\d+)\.(\d+)/);
+        if (match) {
+          const ratingKey = match[2];
+          await this.client.post(`/hubs/sections/${libraryId}/manage`, null, {
+            params: { metadataItemId: ratingKey, promotedToRecommended: 1 }
+          });
+        }
+      }
+
+      console.log(`[Plex] Reordered ${collectionHubs.length} collection hubs in library ${libraryId}`);
+    } catch (error) {
+      console.error(`[Plex] Failed to reorder collection hubs: ${error.message}`);
+    }
+  }
+
+  /**
+   * Legacy method - kept for compatibility
+   */
+  async promoteCollectionToRecommended(collectionRatingKey) {
+    try {
+      await this.client.put(`/library/collections/${collectionRatingKey}/prefs`, null, {
+        params: {
+          'collectionMode': 2,
+          'contentRating': ''
+        }
+      });
+      return true;
+    } catch (error) {
+      console.error(`[Plex] Failed to promote collection: ${error.message}`);
       return false;
     }
   }
@@ -364,10 +456,10 @@ class PlexService {
         const newCollections = await this.getCollections(libraryId);
         collection = newCollections.find(c => c.title === episodeTitle);
 
-        // Promote to Recommended tab
+        // Pin to Recommended tab and reorder
         if (collection && promoteToRecommended) {
-          await this.promoteCollectionToRecommended(collection.ratingKey);
-          console.log(`[Plex] Promoted collection "${episodeTitle}" to Recommended`);
+          await this.pinCollectionToRecommended(libraryId, collection.ratingKey, episodeTitle);
+          await this.reorderCollectionHubs(libraryId);
         }
       }
       return collection;
@@ -405,10 +497,10 @@ class PlexService {
       collection = newCollections.find(c => c.title === title);
     }
 
-    // Promote newly created collections to Recommended tab
+    // Pin newly created collections to Recommended tab and reorder
     if (collection && isNewCollection && promoteToRecommended) {
-      await this.promoteCollectionToRecommended(collection.ratingKey);
-      console.log(`[Plex] Promoted collection "${title}" to Recommended`);
+      await this.pinCollectionToRecommended(libraryId, collection.ratingKey, title);
+      await this.reorderCollectionHubs(libraryId);
     }
 
     return collection;
