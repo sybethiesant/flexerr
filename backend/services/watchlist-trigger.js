@@ -705,6 +705,21 @@ class WatchlistTriggerService {
 
       console.log(`[Restoration] Completed restoration for ${details.title}`);
 
+      // Send restoration notification
+      try {
+        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        await NotificationService.notify('on_restore', {
+          title: details.title,
+          year: details.year,
+          poster: details.poster_path,
+          mediaType: mediaType,
+          user: user?.username,
+          action: 'Content Restored'
+        });
+      } catch (notifyErr) {
+        console.warn('[Restoration] Failed to send notification:', notifyErr.message);
+      }
+
       return restoration;
     } catch (error) {
       console.error('[Restoration] Error handling restoration:', error);
