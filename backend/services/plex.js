@@ -619,7 +619,11 @@ class PlexService {
         }
       });
 
-      for (const user of homeRes.data || []) {
+      // API may return array directly or nested in an object
+      const homeUsers = Array.isArray(homeRes.data) ? homeRes.data :
+                        Array.isArray(homeRes.data?.users) ? homeRes.data.users : [];
+
+      for (const user of homeUsers) {
         users.push({
           id: user.id,
           uuid: user.uuid,
