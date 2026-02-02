@@ -4,6 +4,7 @@ const { MediaServerFactory } = require('./media-server');
 const SonarrService = require('./sonarr');
 const RadarrService = require('./radarr');
 const Viper = require('./smart-episodes');
+const NotificationService = require('./notifications');
 
 class RulesEngine {
   constructor() {
@@ -848,6 +849,21 @@ class RulesEngine {
             );
             actionResult.success = true;
             actionResult.message = `Added to "Leaving Soon" queue`;
+
+            // Send notification for new queue additions
+            try {
+              await NotificationService.notify('on_leaving_soon', {
+                title: item.title,
+                year: item.year,
+                poster: item.thumb ? this.plex.url + item.thumb + '?X-Plex-Token=' + this.plex.token : null,
+                mediaType: item.type,
+                rule: rule.name,
+                action: 'Added to Leaving Soon',
+                daysRemaining: rule.buffer_days || 15
+              });
+            } catch (notifyErr) {
+              console.warn('[Rules] Failed to send leaving soon notification:', notifyErr.message);
+            }
           } else {
             actionResult.success = true;
             actionResult.message = `Already in queue`;

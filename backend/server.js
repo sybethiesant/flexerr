@@ -586,10 +586,27 @@ app.get('/api/auth/plex/callback/:id', async (req, res) => {
       });
     }
 
+    // Check if user exists before login (to detect new users)
+    const existingUserCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+
     // Normal login - complete the full flow
     const loginResult = await AuthService.login(pinResult.token);
     if (!loginResult.success) {
       return res.status(401).json({ error: loginResult.error });
+    }
+
+    // Check if this is a new user (user count increased)
+    const newUserCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    if (newUserCount > existingUserCount && loginResult.user) {
+      // New user joined - send notification
+      try {
+        await NotificationService.notifyUserJoined({
+          username: loginResult.user.username,
+          media_server_type: 'plex'
+        });
+      } catch (notifyErr) {
+        console.warn('[Auth] Failed to send new user notification:', notifyErr.message);
+      }
     }
 
     res.json({

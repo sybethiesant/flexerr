@@ -1930,8 +1930,8 @@ class Viper {
             .map(([show, eps]) => `**${show}**: ${eps.join(', ')}`)
             .join('\n');
 
-          await NotificationService.notify('on_delete', {
-            title: 'Smart Cleanup Complete',
+          await NotificationService.notify('on_viper_cleanup', {
+            title: 'VIPER Episode Cleanup Complete',
             message: `Deleted ${results.deleted.length} watched episode${results.deleted.length !== 1 ? 's' : ''} from ${Object.keys(showGroups).length} show${Object.keys(showGroups).length !== 1 ? 's' : ''}`,
             details: showSummary,
             type: 'smart_cleanup',
@@ -1941,7 +1941,7 @@ class Viper {
               deleted: results.deleted.length
             }
           });
-          console.log(`[VIPER] Discord notification sent for ${results.deleted.length} deletions`);
+          console.log(`[VIPER] Notification sent for ${results.deleted.length} episode deletions`);
         } catch (notifyErr) {
           console.error('[VIPER] Failed to send notification:', notifyErr.message);
         }
@@ -2248,8 +2248,8 @@ class Viper {
         try {
           const movieList = results.deleted.map(m => `**${m.title}** (${m.year || 'Unknown'})`).join('\n');
 
-          await NotificationService.notify('on_delete', {
-            title: 'Movie Cleanup Complete',
+          await NotificationService.notify('on_viper_cleanup', {
+            title: 'VIPER Movie Cleanup Complete',
             message: `Deleted ${results.deleted.length} watched movie${results.deleted.length !== 1 ? 's' : ''}`,
             details: movieList,
             type: 'movie_cleanup',
@@ -2258,7 +2258,7 @@ class Viper {
               deleted: results.deleted.length
             }
           });
-          console.log(`[VIPER] Discord notification sent for ${results.deleted.length} movie deletions`);
+          console.log(`[VIPER] Notification sent for ${results.deleted.length} movie deletions`);
         } catch (notifyErr) {
           console.error('[VIPER] Failed to send movie notification:', notifyErr.message);
         }
