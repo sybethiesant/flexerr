@@ -2,6 +2,32 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.5-beta] - 2026-02-02
+
+### Fixed
+
+- **TMDB Search**: Fixed search for titles containing years (e.g., "Blade Runner 2049") which were incorrectly parsed
+- **Plex Home Users**: Fixed iteration over Plex home users during watchlist sync - now properly handles all managed users
+
+## [1.1.4-beta] - 2026-02-02
+
+### Added
+
+- **Configurable Debug Logging**: New admin UI for controlling log verbosity with 4 levels:
+  - **OFF (0)**: Only critical errors logged
+  - **BASIC (1)**: Errors, warnings, and key events
+  - **VERBOSE (2)**: API calls, sync operations, state changes
+  - **TRACE (3)**: Everything including function entry/exit and internal state
+
+  Access via Settings → Debug tab (admin only). Useful for troubleshooting sync issues, VIPER analysis, and API problems.
+
+### Technical Details
+
+- Debug level persists across restarts (stored in database)
+- 5-second cache to minimize database queries
+- Structured logging with categories, timestamps, and optional data payloads
+- New logger methods: `verbose()`, `trace()`, `apiRequest()`, `apiResponse()`, `enter()`, `exit()`, `state()`, `dbQuery()`, `dump()`
+
 ## [1.1.3-beta] - 2026-01-31
 
 ### Changed
