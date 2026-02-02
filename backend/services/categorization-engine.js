@@ -235,6 +235,38 @@ class CategorizationEngine {
   }
 
   /**
+   * Map language name to ISO 639-1 code
+   * Used when Radarr/Sonarr returns full language names instead of codes
+   */
+  mapLanguageNameToCode(name) {
+    if (!name) return '';
+    const languageMap = {
+      'english': 'en', 'spanish': 'es', 'french': 'fr', 'german': 'de',
+      'italian': 'it', 'portuguese': 'pt', 'russian': 'ru', 'japanese': 'ja',
+      'chinese': 'zh', 'korean': 'ko', 'arabic': 'ar', 'hindi': 'hi',
+      'dutch': 'nl', 'polish': 'pl', 'swedish': 'sv', 'danish': 'da',
+      'norwegian': 'no', 'finnish': 'fi', 'turkish': 'tr', 'greek': 'el',
+      'hebrew': 'he', 'thai': 'th', 'vietnamese': 'vi', 'indonesian': 'id',
+      'czech': 'cs', 'hungarian': 'hu', 'romanian': 'ro', 'ukrainian': 'uk',
+      'catalan': 'ca', 'croatian': 'hr', 'serbian': 'sr', 'slovak': 'sk',
+      'slovenian': 'sl', 'bulgarian': 'bg', 'malay': 'ms', 'tagalog': 'tl',
+      'afrikaans': 'af', 'icelandic': 'is', 'estonian': 'et', 'latvian': 'lv',
+      'lithuanian': 'lt', 'persian': 'fa', 'bengali': 'bn', 'tamil': 'ta',
+      'telugu': 'te', 'kannada': 'kn', 'malayalam': 'ml', 'punjabi': 'pa',
+      'marathi': 'mr', 'gujarati': 'gu', 'urdu': 'ur', 'nepali': 'ne',
+      'sinhalese': 'si', 'burmese': 'my', 'khmer': 'km', 'lao': 'lo',
+      'mongolian': 'mn', 'tibetan': 'bo', 'georgian': 'ka', 'armenian': 'hy',
+      'azerbaijani': 'az', 'kazakh': 'kk', 'uzbek': 'uz', 'swahili': 'sw',
+      'amharic': 'am', 'somali': 'so', 'hausa': 'ha', 'yoruba': 'yo',
+      'igbo': 'ig', 'zulu': 'zu', 'xhosa': 'xh', 'welsh': 'cy',
+      'irish': 'ga', 'scottish gaelic': 'gd', 'basque': 'eu', 'galician': 'gl',
+      'mandarin': 'zh', 'cantonese': 'zh'
+    };
+    const normalized = name.toLowerCase().trim();
+    return languageMap[normalized] || normalized;
+  }
+
+  /**
    * Compare values using the specified operator
    */
   compareValues(itemValue, op, compareValue) {
@@ -317,7 +349,7 @@ class CategorizationEngine {
             title: movie.title,
             year: movie.year,
             genres: movie.genres || [],
-            original_language: movie.originalLanguage?.name || '',
+            original_language: this.mapLanguageNameToCode(movie.originalLanguage?.name || ''),
             overview: movie.overview,
             rating: movie.ratings?.tmdb?.value || 0,
             status: movie.status
@@ -357,7 +389,7 @@ class CategorizationEngine {
             name: show.title,
             first_air_date: show.firstAired,
             genres: show.genres || [],
-            original_language: show.originalLanguage?.name || '',
+            original_language: this.mapLanguageNameToCode(show.originalLanguage?.name || ''),
             overview: show.overview,
             rating: show.ratings?.value || 0,
             status: show.status,
