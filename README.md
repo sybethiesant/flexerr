@@ -40,6 +40,7 @@ Flexerr manages your entire media lifecycle - from request to cleanup. Users add
 - **Auto Convert** - Hardware-accelerated video conversion with NVIDIA NVENC support
 - **Multi-User Support** - Each user has their own watchlist and viewing history
 - **Connected Services Management** - Configure and test services from the Settings page
+- **Debug Logging** - Configurable log verbosity (OFF/BASIC/VERBOSE/TRACE) for troubleshooting
 
 ## How It Works
 
@@ -515,6 +516,7 @@ The admin dashboard provides:
 - **Queue** - View and manage pending deletions
 - **Logs** - Activity and error logging
 - **Connected Services** - Manage media server and download managers
+- **Debug Logging** - Configure log verbosity for troubleshooting (Settings → Debug)
 
 ## Troubleshooting
 
@@ -550,6 +552,17 @@ The admin dashboard provides:
 - Add content to watchlist to protect it
 - **Use the Protect toggle** on the media detail page for permanent protection
 - Check "Leaving Soon" collection for upcoming deletions
+
+### Need more detailed logs for debugging
+
+1. Go to Settings → Debug tab (admin only)
+2. Set debug level:
+   - **BASIC** - Errors, warnings, key events
+   - **VERBOSE** - API calls, sync operations (recommended for most issues)
+   - **TRACE** - Everything (generates lots of output)
+3. Reproduce the issue
+4. View logs: `docker logs flexerr --tail 500`
+5. Set back to **OFF** when done to reduce log noise
 
 ## API Reference
 
@@ -589,6 +602,8 @@ GET  /api/rules               - List rules
 POST /api/rules               - Create rule
 GET  /api/settings            - Get settings
 PUT  /api/settings            - Update settings
+GET  /api/settings/debug      - Get debug level and options
+PUT  /api/settings/debug      - Set debug level (0-3)
 GET  /api/services            - List services
 POST /api/services            - Add service
 ```
