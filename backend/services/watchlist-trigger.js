@@ -1052,29 +1052,40 @@ class WatchlistTriggerService {
           // Determine media type from Plex item
           const mediaType = item.type === 'movie' ? 'movie' : 'tv';
 
+          // Clean title - Plex sometimes includes year in parentheses like "The Americans (2013)"
+          // Strip it for TMDB search, but keep the year for matching
+          let searchTitle = item.title;
+          let extractedYear = item.year;
+          const yearMatch = item.title.match(/^(.+?)\s*\((\d{4})\)$/);
+          if (yearMatch) {
+            searchTitle = yearMatch[1].trim();
+            extractedYear = extractedYear || parseInt(yearMatch[2]);
+          }
+
           // Search TMDB to get the TMDB ID
           const searchResponse = mediaType === 'movie'
-            ? await TMDBService.searchMovies(item.title)
-            : await TMDBService.searchTV(item.title);
+            ? await TMDBService.searchMovies(searchTitle)
+            : await TMDBService.searchTV(searchTitle);
 
           const searchResults = searchResponse?.results || [];
 
           if (!searchResults || searchResults.length === 0) {
-            console.log(`[WatchlistSync] Could not find "${item.title}" on TMDB`);
+            console.log(`[WatchlistSync] Could not find "${item.title}" on TMDB (searched: "${searchTitle}")`);
             results.errors++;
             continue;
           }
 
           // Find best match by title and year (using normalized comparison for character substitutions)
           // This handles cases like "PLUR1BUS" (Plex) vs "Pluribus" (TMDB)
+          // Use searchTitle (cleaned) and extractedYear for matching
           let tmdbMatch = searchResults.find(r =>
-            titlesMatch(r.title, item.title) && r.year === item.year
+            titlesMatch(r.title, searchTitle) && r.year === extractedYear
           ) || searchResults.find(r =>
-            titlesMatch(r.title, item.title)
+            titlesMatch(r.title, searchTitle)
           ) || searchResults.find(r =>
-            r.title?.toLowerCase() === item.title?.toLowerCase() && r.year === item.year
+            r.title?.toLowerCase() === searchTitle?.toLowerCase() && r.year === extractedYear
           ) || searchResults.find(r =>
-            r.title?.toLowerCase() === item.title?.toLowerCase()
+            r.title?.toLowerCase() === searchTitle?.toLowerCase()
           ) || searchResults[0];
 
           const tmdbId = tmdbMatch.id;
