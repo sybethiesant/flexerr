@@ -33,6 +33,7 @@ const RulesEngine = require('./services/rules-engine');
 const scheduler = require('./services/scheduler');
 const NotificationService = require('./services/notifications');
 const Viper = require('./services/smart-episodes');
+const DebugLogger = require('./services/debug-logger');
 
 const app = express();
 const PORT = process.env.PORT || 5505;
@@ -1351,8 +1352,36 @@ app.put('/api/settings', authenticate, requireAdmin, (req, res) => {
     });
   }
 
+  // Refresh debug logger cache if debug level changed
+  if (updates.debug_level !== undefined) {
+    DebugLogger.refreshCache();
+    console.log(`[Settings] Debug level changed to: ${DebugLogger.getLevelName(parseInt(updates.debug_level))}`);
+  }
+
   log('info', 'system', 'Settings updated', { keys: Object.keys(updates), user_id: req.user.userId });
   res.json({ success: true });
+});
+
+// Get/Set debug level
+app.get('/api/settings/debug', authenticate, requireAdmin, (req, res) => {
+  const level = DebugLogger.getCurrentLevel();
+  res.json({
+    level,
+    levelName: DebugLogger.getLevelName(level),
+    levels: DebugLogger.LEVEL_NAMES.map((name, i) => ({ value: i, label: name }))
+  });
+});
+
+app.put('/api/settings/debug', authenticate, requireAdmin, (req, res) => {
+  const { level } = req.body;
+  if (level === undefined || level < 0 || level > 3) {
+    return res.status(400).json({ error: 'Invalid debug level (0-3)' });
+  }
+  setSetting('debug_level', level.toString());
+  DebugLogger.refreshCache();
+  console.log(`[Settings] Debug level set to: ${DebugLogger.getLevelName(level)} (${level})`);
+  log('info', 'system', 'Debug level changed', { level, levelName: DebugLogger.getLevelName(level), user_id: req.user.userId });
+  res.json({ success: true, level, levelName: DebugLogger.getLevelName(level) });
 });
 
 // Detect available GPU hardware for transcoding

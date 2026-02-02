@@ -5,7 +5,8 @@ import {
   Server, Save, Loader2, RotateCcw, Eye, EyeOff,
   ChevronDown, ChevronUp, HardDrive, Zap, Video, Play,
   CheckCircle, XCircle, Plus, Trash2, Edit2, ExternalLink,
-  Search, X, Layers, Tv, Shield, Bell, Send, MessageSquare, Mail, Globe, AlertTriangle
+  Search, X, Layers, Tv, Shield, Bell, Send, MessageSquare, Mail, Globe, AlertTriangle,
+  Bug
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -516,6 +517,7 @@ const SETTINGS_TABS = [
   { id: 'media', label: 'Media Sync', icon: Tv },
   { id: 'cleanup', label: 'Cleanup', icon: Clock },
   { id: 'convert', label: 'Auto Convert', icon: Video },
+  { id: 'debug', label: 'Debug', icon: Bug },
 ];
 
 // ============================================
@@ -580,6 +582,12 @@ export default function SettingsPage() {
   const [addingWebhook, setAddingWebhook] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(null);
 
+  // Debug settings state
+  const [debugLevel, setDebugLevel] = useState(0);
+  const [debugLevels, setDebugLevels] = useState([]);
+  const [loadingDebug, setLoadingDebug] = useState(false);
+  const [savingDebug, setSavingDebug] = useState(false);
+
   // Derive enabledProviders from settings synchronously (avoids useEffect timing gap)
   const enabledProviders = useMemo(() => {
     if (settings.discover_providers) {
@@ -610,6 +618,7 @@ export default function SettingsPage() {
     fetchSettings();
     fetchServices();
     fetchWebhooks();
+    fetchDebugSettings();
     detectHardware();
     fetchPlexLibraries();
     fetchInvitations();
@@ -693,6 +702,33 @@ export default function SettingsPage() {
       console.error('Failed to load webhooks:', err);
     } finally {
       setLoadingWebhooks(false);
+    }
+  };
+
+  const fetchDebugSettings = async () => {
+    setLoadingDebug(true);
+    try {
+      const res = await api.get('/settings/debug');
+      setDebugLevel(res.data.level);
+      setDebugLevels(res.data.levels || []);
+    } catch (err) {
+      console.error('Failed to load debug settings:', err);
+    } finally {
+      setLoadingDebug(false);
+    }
+  };
+
+  const saveDebugLevel = async (level) => {
+    setSavingDebug(true);
+    try {
+      await api.put('/settings/debug', { level });
+      setDebugLevel(level);
+      toast.success(`Debug level set to ${debugLevels.find(l => l.value === level)?.label || level}`);
+    } catch (err) {
+      console.error('Failed to save debug level:', err);
+      toast.error('Failed to save debug level');
+    } finally {
+      setSavingDebug(false);
     }
   };
 
@@ -2850,6 +2886,88 @@ export default function SettingsPage() {
     </div>
   );
 
+  // ============================================
+  // Debug Tab
+  // ============================================
+  const renderDebugTab = () => (
+    <div className="space-y-6">
+      <SettingSection title="Debug Logging" icon={Bug}>
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-4">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm text-amber-200 font-medium">Debug Mode</p>
+              <p className="text-xs text-amber-300/80 mt-1">
+                Higher debug levels generate significant log output. Use TRACE level only when troubleshooting specific issues.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <SettingRow label="Debug Level" description="Controls the verbosity of system logging">
+          {loadingDebug ? (
+            <div className="flex items-center gap-2 text-slate-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading...
+            </div>
+          ) : (
+            <select
+              value={debugLevel}
+              onChange={(e) => saveDebugLevel(parseInt(e.target.value))}
+              disabled={savingDebug}
+              className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              {debugLevels.map((level) => (
+                <option key={level.value} value={level.value}>
+                  {level.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </SettingRow>
+
+        <div className="mt-4 space-y-3">
+          <h4 className="text-sm font-medium text-slate-300">Level Descriptions</h4>
+          <div className="grid gap-2">
+            <div className="flex items-start gap-3 p-2 bg-slate-700/30 rounded-lg">
+              <span className="text-xs font-mono bg-slate-600 px-2 py-0.5 rounded">OFF</span>
+              <span className="text-sm text-slate-400">Only critical errors are logged</span>
+            </div>
+            <div className="flex items-start gap-3 p-2 bg-slate-700/30 rounded-lg">
+              <span className="text-xs font-mono bg-green-600/50 px-2 py-0.5 rounded">BASIC</span>
+              <span className="text-sm text-slate-400">Errors, warnings, and key events</span>
+            </div>
+            <div className="flex items-start gap-3 p-2 bg-slate-700/30 rounded-lg">
+              <span className="text-xs font-mono bg-blue-600/50 px-2 py-0.5 rounded">VERBOSE</span>
+              <span className="text-sm text-slate-400">API calls, sync operations, state changes</span>
+            </div>
+            <div className="flex items-start gap-3 p-2 bg-slate-700/30 rounded-lg">
+              <span className="text-xs font-mono bg-purple-600/50 px-2 py-0.5 rounded">TRACE</span>
+              <span className="text-sm text-slate-400">Everything - internal state, variable values, function entry/exit</span>
+            </div>
+          </div>
+        </div>
+      </SettingSection>
+
+      <SettingSection title="Log Information" icon={AlertTriangle}>
+        <div className="space-y-3 text-sm text-slate-400">
+          <p>
+            Debug logs are written to the Docker container's standard output. To view logs:
+          </p>
+          <div className="bg-slate-800 rounded-lg p-3 font-mono text-xs">
+            <code className="text-green-400">docker logs flexerr --tail 100</code>
+          </div>
+          <p>
+            For live log streaming:
+          </p>
+          <div className="bg-slate-800 rounded-lg p-3 font-mono text-xs">
+            <code className="text-green-400">docker logs -f flexerr</code>
+          </div>
+        </div>
+      </SettingSection>
+    </div>
+  );
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'general':
@@ -2866,6 +2984,8 @@ export default function SettingsPage() {
         return renderCleanupTab();
       case 'convert':
         return renderConvertTab();
+      case 'debug':
+        return renderDebugTab();
       default:
         return renderGeneralTab();
     }
