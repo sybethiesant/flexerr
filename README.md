@@ -82,7 +82,7 @@ User Watchlist → Media Acquisition → Watch → VIPER Cleanup → Re-watchlis
 mkdir flexerr && cd flexerr
 
 # Download the example compose file
-curl -O https://raw.githubusercontent.com/sybersects/flexerr/main/docker-compose.example.yml
+curl -O https://raw.githubusercontent.com/sybethiesant/flexerr/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml
 
 # Start Flexerr
@@ -92,7 +92,7 @@ docker compose up -d
 **Option 2: Build from Source**
 
 ```bash
-git clone https://github.com/sybersects/flexerr.git
+git clone https://github.com/sybethiesant/flexerr.git
 cd flexerr
 docker compose up -d
 ```
@@ -569,7 +569,7 @@ The admin dashboard provides:
 ### Authentication
 ```
 POST /api/auth/plex/start     - Start Plex OAuth flow
-GET  /api/auth/plex/callback  - Complete OAuth
+GET  /api/auth/plex/callback/:id - Complete OAuth
 POST /api/jellyfin/auth       - Jellyfin authentication
 POST /api/auth/refresh        - Refresh JWT token
 GET  /api/auth/me             - Get current user
@@ -587,7 +587,7 @@ GET /api/discover/tv/:id      - TV show details
 ```
 GET    /api/watchlist         - User's watchlist
 POST   /api/watchlist         - Add to watchlist
-DELETE /api/watchlist/:id     - Remove from watchlist
+DELETE /api/watchlist/:tmdbId/:mediaType - Remove from watchlist
 ```
 
 ### Protection
@@ -610,7 +610,7 @@ POST /api/services            - Add service
 
 ## Tech Stack
 
-- **Frontend**: React 18, Tailwind CSS, Vite
+- **Frontend**: React 18, Tailwind CSS
 - **Backend**: Node.js, Express, SQLite (better-sqlite3)
 - **Authentication**: Plex OAuth, Jellyfin Auth, JWT
 - **APIs**: TMDB, Sonarr, Radarr, Plex, Jellyfin
@@ -659,5 +659,5 @@ MIT License - see [LICENSE](LICENSE) file.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/sybersects/flexerr/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/sybersects/flexerr/discussions)
+- **Issues**: [GitHub Issues](https://github.com/sybethiesant/flexerr/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/sybethiesant/flexerr/discussions)

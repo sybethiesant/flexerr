@@ -473,7 +473,7 @@ Already connected during setup. To reconnect:
 
 1. Go to Settings → Connected Services
 2. Enter Jellyfin URL (e.g., `http://192.168.1.100:8096`)
-3. Enter API Key (found in Jellyfin → Dashboard → API Keys)
+3. Enter your Jellyfin username and password
 4. Click Test & Save
 
 ### Sonarr

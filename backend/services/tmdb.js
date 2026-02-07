@@ -557,7 +557,9 @@ class TMDBService {
       revenue: data.revenue,
       genres: data.genres,
       production_companies: data.production_companies,
+      original_language: data.original_language,
       spoken_languages: data.spoken_languages,
+      production_countries: data.production_countries,
       external_ids: {
         imdb_id: data.external_ids?.imdb_id,
         tvdb_id: null
@@ -608,6 +610,8 @@ class TMDBService {
       year: this.getYear(data.first_air_date),
       status: data.status,
       type: data.type,
+      original_language: data.original_language,
+      origin_country: data.origin_country,
       vote_average: data.vote_average,
       vote_count: data.vote_count,
       popularity: data.popularity,
