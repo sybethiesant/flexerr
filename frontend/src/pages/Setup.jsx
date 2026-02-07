@@ -285,10 +285,10 @@ export default function Setup() {
             {plexAuth.servers && plexAuth.servers.length > 1 && (
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">Select Your Server</label>
-                <select onChange={(e) => { const server = plexAuth.servers.find(s => s.clientIdentifier === e.target.value); if (server) selectPlexServer(server); }}
+                <select onChange={(e) => { const server = plexAuth.servers.find(s => (s.clientId || s.clientIdentifier) === e.target.value); if (server) selectPlexServer(server); }}
                   className="w-full bg-slate-700 border-slate-600 text-white rounded-lg">
                   <option value="">-- Choose a server --</option>
-                  {plexAuth.servers.map(s => <option key={s.clientIdentifier} value={s.clientIdentifier}>{s.name} {s.owned ? '(owned)' : '(shared)'}</option>)}
+                  {plexAuth.servers.map(s => <option key={s.clientId || s.clientIdentifier} value={s.clientId || s.clientIdentifier}>{s.name} {s.owned ? '(owned)' : '(shared)'}</option>)}
                 </select>
               </div>
             )}
