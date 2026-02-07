@@ -47,11 +47,7 @@ coverage/
 !README.md
 !CHANGELOG.md
 !DOCKERHUB.md
-!INSTALLATION.md
-
-# Private audit logs (not for git)
-AUDIT_LOG.md
-audit-*.md
+docs/
 
 # Development files
 flexerr/
