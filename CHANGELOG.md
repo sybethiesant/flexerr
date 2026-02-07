@@ -22,10 +22,6 @@ All notable changes to Flexerr will be documented in this file.
 
 - **Foreign Films Collection**: Fixed categorization rule incorrectly matching English-language movies
 
-### Changed
-
-- **Repository Cleanup**: Removed unused documentation files (AUDIT_LOG.md, INSTALLATION.md), updated .gitignore to only track README, CHANGELOG, and DOCKERHUB docs
-
 ## [1.1.5-beta] - 2026-02-02
 
 ### Fixed
@@ -121,9 +117,7 @@ All notable changes to Flexerr will be documented in this file.
 
 ### Documentation
 
-- Created comprehensive audit logs: `AUDIT_LOG_2026-01-29.md`, `AUDIT_SUMMARY_2026-01-29.md`
 - Updated `CLAUDE.md` with correct database query patterns and troubleshooting guides
-- Fixed 18 out of 27 issues identified in code audit (67% completion rate)
 
 ## [1.1.1-hotfix] - 2026-01-28
 
