@@ -1122,7 +1122,7 @@ class PlexService {
    * Invite a user to the Plex server with access to specific libraries
    * @param {string} adminToken - The server owner's Plex token
    * @param {string} machineIdentifier - The server's machine ID
-   * @param {string} inviteEmail - Email of the user to invite
+   * @param {string} userPlexId - Plex user ID of the user to invite
    * @param {Array<string>} librarySectionIds - Library section IDs to share (empty = all)
    */
   static async inviteUserToServer(adminToken, machineIdentifier, userPlexId, librarySectionIds = []) {
@@ -1132,12 +1132,15 @@ class PlexService {
 
       // Use Plex.tv API - requires invited_id (Plex user ID), not email
       // POST to /api/servers/{machineId}/shared_servers
+      const sharedServer = {
+        invited_id: parseInt(userPlexId)
+      };
+      if (librarySectionIds.length > 0) {
+        sharedServer.library_section_ids = librarySectionIds.map(id => parseInt(id));
+      }
       const shareData = {
         server_id: machineIdentifier,
-        shared_server: {
-          library_section_ids: librarySectionIds.length > 0 ? librarySectionIds.map(id => parseInt(id)) : [],
-          invited_id: parseInt(userPlexId)
-        }
+        shared_server: sharedServer
       };
 
       console.log(`[Plex] Request URL: https://plex.tv/api/servers/${machineIdentifier}/shared_servers`);
@@ -1155,10 +1158,10 @@ class PlexService {
         }
       );
 
-      console.log(`[Plex] Successfully invited ${inviteEmail}`);
+      console.log(`[Plex] Successfully invited user ${userPlexId}`);
       return {
         success: true,
-        message: `Invitation sent to ${inviteEmail}`,
+        message: `Invitation sent to user ${userPlexId}`,
         data: response.data
       };
     } catch (error) {

@@ -592,6 +592,9 @@ app.get('/api/auth/plex/callback/:id', async (req, res) => {
 
     // Normal login - complete the full flow
     const loginResult = await AuthService.login(pinResult.token);
+    if (!loginResult.success && loginResult.invited) {
+      return res.json({ success: false, invited: true, message: loginResult.error });
+    }
     if (!loginResult.success) {
       return res.status(401).json({ error: loginResult.error });
     }
