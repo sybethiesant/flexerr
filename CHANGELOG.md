@@ -2,6 +2,30 @@
 
 All notable changes to Flexerr will be documented in this file.
 
+## [1.1.6-beta] - 2026-02-07
+
+### Fixed
+
+- **Plex Auto-Invite System**: Fixed end-to-end broken auto-invite flow for new users
+  - Backend now returns proper 200 response with `invited` flag instead of 401 error
+  - Frontend handles invite response gracefully - stops polling and shows friendly message
+  - Fixed undefined variable `inviteEmail` in Plex invite API call (now uses `userPlexId`)
+  - Fixed empty library array being sent as `[]` instead of omitted (which shares all libraries)
+
+- **Leaving Soon Collection Sync**: Fixed stale items accumulating in Plex "Leaving Soon" collection
+  - Items are now automatically removed from the Plex collection when completed, cancelled, or cleaned up
+  - Covers all 7 exit points in both `processQueue()` and `cleanupStaleQueueItems()`
+  - Added `removeFromLeavingSoonCollection()` helper method to rules engine
+
+- **Setup Wizard**: Fixed Continue button staying disabled after selecting a Plex server
+  - Backend returns `clientId` but frontend expected `clientIdentifier` - added fallback handling
+
+- **Foreign Films Collection**: Fixed categorization rule incorrectly matching English-language movies
+
+### Changed
+
+- **Repository Cleanup**: Removed unused documentation files (AUDIT_LOG.md, INSTALLATION.md), updated .gitignore to only track README, CHANGELOG, and DOCKERHUB docs
+
 ## [1.1.5-beta] - 2026-02-02
 
 ### Fixed

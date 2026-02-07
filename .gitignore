@@ -47,6 +47,7 @@ coverage/
 !README.md
 !CHANGELOG.md
 !DOCKERHUB.md
+!CLAUDE.md
 docs/
 
 # Development files
