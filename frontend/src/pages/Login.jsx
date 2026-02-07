@@ -41,6 +41,12 @@ function Login() {
       pollingRef.current = setInterval(async () => {
         try {
           const checkRes = await api.get(`/auth/plex/callback/${id}`);
+          if (checkRes.data.invited) {
+            clearInterval(pollingRef.current);
+            setPolling(false);
+            setError(checkRes.data.message || 'An invitation to the Plex server has been sent to your email. Please accept it and try logging in again.');
+            return;
+          }
           if (checkRes.data.success) {
             clearInterval(pollingRef.current);
             setPolling(false);

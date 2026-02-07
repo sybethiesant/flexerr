@@ -1106,6 +1106,7 @@ class RulesEngine {
         } catch (error) {
           // Item might already be deleted
           db.prepare("UPDATE queue_items SET status = 'completed' WHERE id = ?").run(queueItem.id);
+          await this.removeFromLeavingSoonCollection(queueItem);
           continue;
         }
 
@@ -1135,6 +1136,7 @@ class RulesEngine {
         if (onWatchlist) {
           // User saved it, cancel the deletion
           db.prepare("UPDATE queue_items SET status = 'cancelled' WHERE id = ?").run(queueItem.id);
+          await this.removeFromLeavingSoonCollection(queueItem);
           log('info', 'rule', `Item saved by user (watchlist): ${queueItem.title}`, {
             media_id: queueItem.plex_id
           });
@@ -1157,6 +1159,7 @@ class RulesEngine {
           if (!stillMatches) {
             // Item no longer matches rule conditions - remove from queue
             db.prepare("UPDATE queue_items SET status = 'cancelled' WHERE id = ?").run(queueItem.id);
+            await this.removeFromLeavingSoonCollection(queueItem);
             log('info', 'rule', `Item no longer matches rule conditions: ${queueItem.title}`, {
               media_id: queueItem.plex_id,
               rule_name: fullRule.name
@@ -1190,6 +1193,10 @@ class RulesEngine {
             allSuccess ? null : results.find(r => !r.success)?.message,
             queueItem.id
           );
+
+          if (allSuccess) {
+            await this.removeFromLeavingSoonCollection(queueItem);
+          }
 
           if (allSuccess && !dryRun) {
             // Update daily stats
@@ -1466,6 +1473,32 @@ class RulesEngine {
     };
   }
 
+  // Remove an item from the Plex "Leaving Soon" collection when it leaves the queue
+  async removeFromLeavingSoonCollection(queueItem) {
+    try {
+      const collectionName = getSetting('collection_name') || 'Leaving Soon';
+      const libraries = await this.plex.getLibraries();
+      const library = libraries.find(l =>
+        (queueItem.media_type === 'movie' && l.type === 'movie') ||
+        (queueItem.media_type === 'show' && l.type === 'show') ||
+        (queueItem.media_type === 'episode' && l.type === 'show') ||
+        (queueItem.media_type === 'season' && l.type === 'show')
+      );
+
+      if (library) {
+        const collections = await this.plex.getCollections(library.id);
+        const collection = collections.find(c => c.title === collectionName);
+        if (collection) {
+          await this.plex.removeFromCollection(collection.ratingKey, queueItem.plex_rating_key);
+          log('info', 'rule', `Removed "${queueItem.title}" from Plex "${collectionName}" collection`);
+        }
+      }
+    } catch (error) {
+      // Collection cleanup is best-effort, don't fail the operation
+      console.warn(`[Rules] Could not remove "${queueItem.title}" from Leaving Soon collection: ${error.message}`);
+    }
+  }
+
   // Clean up queue items that no longer match their rules
   async cleanupStaleQueueItems() {
     await this.initialize();
@@ -1490,6 +1523,7 @@ class RulesEngine {
         } catch (error) {
           // Item no longer exists in Plex - remove from queue
           db.prepare("DELETE FROM queue_items WHERE id = ?").run(queueItem.id);
+          await this.removeFromLeavingSoonCollection(queueItem);
           removed++;
           continue;
         }
@@ -1517,6 +1551,7 @@ class RulesEngine {
         if (onWatchlist) {
           // User saved it - remove from queue
           db.prepare("DELETE FROM queue_items WHERE id = ?").run(queueItem.id);
+          await this.removeFromLeavingSoonCollection(queueItem);
           log('info', 'rule', `Queue cleanup: removed watchlisted item: ${queueItem.title}`);
           removed++;
           continue;
@@ -1533,6 +1568,7 @@ class RulesEngine {
 
           if (!stillMatches) {
             db.prepare("DELETE FROM queue_items WHERE id = ?").run(queueItem.id);
+            await this.removeFromLeavingSoonCollection(queueItem);
             log('info', 'rule', `Queue cleanup: ${queueItem.title} no longer matches rule "${queueItem.rule_name}"`);
             removed++;
             continue;
