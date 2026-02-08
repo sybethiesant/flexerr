@@ -29,7 +29,10 @@ data
 !README.md
 docs
 
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+
 # Development
-.env.local
-.env.development
 docker-compose.override.yml
