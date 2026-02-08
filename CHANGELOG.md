@@ -115,10 +115,6 @@ All notable changes to Flexerr will be documented in this file.
 - Watch duration calculation includes sanity checks (positive values, < 24 hours)
 - Multi-server support ensures proper data isolation between Plex and Jellyfin instances
 
-### Documentation
-
-- Updated `CLAUDE.md` with correct database query patterns and troubleshooting guides
-
 ## [1.1.1-hotfix] - 2026-01-28
 
 ### Fixed
